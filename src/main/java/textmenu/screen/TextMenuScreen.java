@@ -70,14 +70,19 @@ public class TextMenuScreen extends Screen {
         );
 
         if (!this.outputText.isEmpty()) {
-            int outputY = 40 + Math.min(300, this.height - 120) + 60;
-            context.drawTextWithShadow(
-                    this.textRenderer,
-                    Text.literal(this.outputText),
-                    this.width / 2 - 100,
-                    outputY,
-                    0x00FF00
-            );
+            int outputY = 40 + Math.min(300, this.height - 120) + 55;
+            String[] outLines = this.outputText.split("\n");
+            int maxLines = Math.max(1, (this.height - outputY - 10) / 12);
+            for (int i = 0; i < Math.min(outLines.length, maxLines); i++) {
+                int color = this.outputText.startsWith("Error:") ? 0xFF5555 : 0x55FF55;
+                context.drawTextWithShadow(
+                        this.textRenderer,
+                        Text.literal(outLines[i]),
+                        this.width / 2 - 150,
+                        outputY + (i * 12),
+                        color
+                );
+            }
         }
     }
 

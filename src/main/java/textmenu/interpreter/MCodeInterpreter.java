@@ -2,1667 +2,580 @@ package textmenu.interpreter;
 
 import java.math.BigInteger;
 import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 
-public class MCodeInterpreter {
+import static textmenu.interpreter.MCodeAst.*;
 
-    private static final Map<String, Object> variables = new LinkedHashMap<>();
-    private static final StringBuilder output = new StringBuilder();
+public final class MCodeInterpreter {
+    private static final Object NONE = null;
+    private static final StringBuilder OUTPUT = new StringBuilder();
+    private static Map<String, Object> lastVariables = new LinkedHashMap<>();
 
-    /*
-     * ============================================================
-     * PUBLIC API
-     * ============================================================
-     */
+    private MCodeInterpreter() {}
 
     public static String execute(String code) {
-        output.setLength(0);
-
+        OUTPUT.setLength(0);
         try {
-            List<String> lines = splitLines(code);
-
-            for (int i = 0; i < lines.size(); i++) {
-                String line = lines.get(i).trim();
-
-                if (line.isEmpty() || line.startsWith("#")) {
-                    continue;
-                }
-
-                try {
-                    executeLine(line);
-                } catch (Exception e) {
-                    output.append("Error en línea ")
-                            .append(i + 1)
-                            .append(": ")
-                            .append(e.getMessage())
-                            .append("\n");
-                }
-            }
-
-        } catch (Exception e) {
-            output.append("Error: ")
-                    .append(e.getMessage())
-                    .append("\n");
+            List<MCodeToken> tokens = new MCodeLexer().tokenize(code);
+            Program program = new MCodeParser(tokens).parse();
+            Runtime runtime = new Runtime();
+            runtime.installBuiltins();
+            for (Statement statement : program.statements()) runtime.execute(statement);
+            lastVariables = runtime.variablesSnapshot();
+            return OUTPUT.toString();
+        } catch (RuntimeException e) {
+            return formatError(e);
         }
-
-        return output.toString();
     }
 
     public static boolean validate(String code) {
-        return getErrors(code).isEmpty();
+        try {
+            new MCodeParser(new MCodeLexer().tokenize(code)).parse();
+            return true;
+        } catch (RuntimeException e) {
+            return false;
+        }
     }
 
     public static List<String> getErrors(String code) {
-        List<String> errors = new ArrayList<>();
-        List<String> lines = splitLines(code);
-
-        for (int i = 0; i < lines.size(); i++) {
-            String line = removeComment(lines.get(i)).trim();
-
-            if (line.isEmpty()) {
-                continue;
-            }
-
-            try {
-                Parser parser = new Parser(line);
-                parser.parseStatement();
-
-                if (!parser.isAtEnd()) {
-                    throw new RuntimeException("Código inesperado: " + parser.peek().text);
-                }
-            } catch (Exception e) {
-                errors.add("Línea " + (i + 1) + ": " + e.getMessage());
-            }
+        try {
+            new MCodeParser(new MCodeLexer().tokenize(code)).parse();
+            return List.of();
+        } catch (RuntimeException e) {
+            return List.of(e.getMessage() == null ? e.toString() : e.getMessage());
         }
-
-        return errors;
     }
 
-    /*
-     * ============================================================
-     * LINE EXECUTION
-     * ============================================================
-     */
-
-    private static void executeLine(String line) {
-        line = removeComment(line).trim();
-
-        if (line.isEmpty()) {
-            return;
-        }
-
-        Parser parser = new Parser(line);
-        parser.execute();
+    public static Map<String, Object> getVariables() {
+        return Collections.unmodifiableMap(lastVariables);
     }
 
-    /*
-     * ============================================================
-     * PARSER
-     * ============================================================
-     *
-     * Grammar:
-     *
-     * statement
-     *     = assignment
-     *     | expression
-     *
-     * assignment
-     *     = identifier "=" expression
-     *     | identifier "[" expression "]" "=" expression
-     *
-     * expression
-     *     = or
-     *
-     * or
-     *     = and ("or" and)*
-     *
-     * and
-     *     = equality ("and" equality)*
-     *
-     * equality
-     *     = comparison (("==" | "!=") comparison)*
-     *
-     * comparison
-     *     = term (("<" | ">" | "<=" | ">=") term)*
-     *
-     * term
-     *     = factor (("+" | "-") factor)*
-     *
-     * factor
-     *     = unary (("*" | "/" | "//" | "%") unary)*
-     *
-     * unary
-     *     = ("-" | "+" | "not") unary
-     *     | power
-     *
-     * power
-     *     = primary ("**" unary)?
-     *
-     * primary
-     *     = number
-     *     | string
-     *     | list
-     *     | tuple
-     *     | set
-     *     | dict
-     *     | identifier
-     *     | function call
-     *     | "(" expression ")"
-     *     | primary "[" expression "]"
-     */
+    public static void clearVariables() {
+        lastVariables = new LinkedHashMap<>();
+    }
 
-    private static class Parser {
+    private static String formatError(RuntimeException e) {
+        OUTPUT.append("Error: ").append(e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage()).append('\n');
+        return OUTPUT.toString();
+    }
 
-        private final List<Token> tokens;
-        private int position = 0;
+    private static final class Runtime {
+        private final Map<String, Object> variables = new LinkedHashMap<>();
 
-        Parser(String source) {
-            this.tokens = tokenize(source);
+        void installBuiltins() {
+            variables.put("print", (Callable) this::builtinPrint);
+            variables.put("len", (Callable) (args, keywords) -> {
+                requireArgs("len", args, 1);
+                return length(args.get(0));
+            });
+            variables.put("type", (Callable) (args, keywords) -> {
+                requireArgs("type", args, 1);
+                return typeName(args.get(0));
+            });
+            variables.put("int", (Callable) (args, keywords) -> convertInt(args.isEmpty() ? BigInteger.ZERO : args.get(0)));
+            variables.put("float", (Callable) (args, keywords) -> convertFloat(args.isEmpty() ? 0.0 : args.get(0)));
+            variables.put("str", (Callable) (args, keywords) -> args.isEmpty() ? "" : stringify(args.get(0)));
+            variables.put("bool", (Callable) (args, keywords) -> truthy(args.isEmpty() ? null : args.get(0)));
+            variables.put("list", (Callable) (args, keywords) -> toList(args.isEmpty() ? null : args.get(0)));
+            variables.put("tuple", (Callable) (args, keywords) -> new TupleValue(toList(args.isEmpty() ? null : args.get(0))));
+            variables.put("set", (Callable) (args, keywords) -> new LinkedHashSet<>(toList(args.isEmpty() ? null : args.get(0))));
+            variables.put("dict", (Callable) (args, keywords) -> new LinkedHashMap<>());
+            variables.put("abs", (Callable) (args, keywords) -> {
+                requireArgs("abs", args, 1);
+                Object value = args.get(0);
+                if (value instanceof BigInteger i) return i.abs();
+                if (value instanceof Number n) return Math.abs(n.doubleValue());
+                throw runtimeError("abs() requiere un número");
+            });
+            variables.put("round", (Callable) (args, keywords) -> {
+                requireArgs("round", args, 1);
+                Object value = args.get(0);
+                if (value instanceof BigInteger) return value;
+                if (value instanceof Number n) return BigInteger.valueOf(Math.round(n.doubleValue()));
+                throw runtimeError("round() requiere un número");
+            });
+            variables.put("min", (Callable) (args, keywords) -> minMax(args, true));
+            variables.put("max", (Callable) (args, keywords) -> minMax(args, false));
+            variables.put("sum", (Callable) (args, keywords) -> {
+                requireArgs("sum", args, 1);
+                List<Object> values = iterable(args.get(0));
+                Object result = BigInteger.ZERO;
+                for (Object value : values) result = binary(result, "+", value);
+                return result;
+            });
+            variables.put("any", (Callable) (args, keywords) -> {
+                requireArgs("any", args, 1);
+                for (Object value : iterable(args.get(0))) if (truthy(value)) return true;
+                return false;
+            });
+            variables.put("all", (Callable) (args, keywords) -> {
+                requireArgs("all", args, 1);
+                for (Object value : iterable(args.get(0))) if (!truthy(value)) return false;
+                return true;
+            });
         }
 
-        void execute() {
-            if (isAssignment()) {
-                parseAssignment();
+        void execute(Statement statement) {
+            if (statement instanceof ExpressionStatement s) {
+                eval(s.expression());
+            } else if (statement instanceof Assignment s) {
+                Object value = eval(s.value());
+                for (Expression target : s.targets()) assign(target, value);
+            } else if (statement instanceof AugmentedAssignment s) {
+                Object current = eval(s.target());
+                Object value = eval(s.value());
+                assign(s.target(), binary(current, s.operator(), value));
             } else {
-                Object result = parseExpression();
-                if (!isAtEnd()) {
-                    throw error("Código inesperado: " + peek().text);
-                }
+                throw runtimeError("Sentencia no soportada todavía: " + statement.getClass().getSimpleName());
             }
         }
 
-        void parseStatement() {
-            if (isAssignment()) {
-                parseAssignment();
-            } else {
-                parseExpression();
+        Object eval(Expression expression) {
+            if (expression instanceof Literal l) return l.value();
+            if (expression instanceof Name n) return lookup(n.name());
+            if (expression instanceof ListExpr l) {
+                List<Object> result = new ArrayList<>();
+                for (Expression item : l.elements()) result.add(eval(item));
+                return result;
             }
+            if (expression instanceof TupleExpr t) {
+                List<Object> result = new ArrayList<>();
+                for (Expression item : t.elements()) result.add(eval(item));
+                return new TupleValue(result);
+            }
+            if (expression instanceof SetExpr s) {
+                Set<Object> result = new LinkedHashSet<>();
+                for (Expression item : s.elements()) result.add(eval(item));
+                return result;
+            }
+            if (expression instanceof DictExpr d) {
+                Map<Object, Object> result = new LinkedHashMap<>();
+                for (Entry entry : d.entries()) result.put(eval(entry.key()), eval(entry.value()));
+                return result;
+            }
+            if (expression instanceof Unary u) return unary(u.operator(), eval(u.expression()));
+            if (expression instanceof Binary b) {
+                if (b.operator().equals("and")) {
+                    Object left = eval(b.left());
+                    return truthy(left) ? eval(b.right()) : left;
+                }
+                if (b.operator().equals("or")) {
+                    Object left = eval(b.left());
+                    return truthy(left) ? left : eval(b.right());
+                }
+                return binary(eval(b.left()), b.operator(), eval(b.right()));
+            }
+            if (expression instanceof Comparison c) {
+                Object left = eval(c.left());
+                for (int i = 0; i < c.operators().size(); i++) {
+                    Object right = eval(c.rights().get(i));
+                    if (!comparison(left, c.operators().get(i), right)) return false;
+                    left = right;
+                }
+                return true;
+            }
+            if (expression instanceof Call c) {
+                Object callable = eval(c.callee());
+                if (!(callable instanceof Callable function)) throw runtimeError("'" + typeName(callable) + "' no es invocable");
+                List<Object> positional = new ArrayList<>();
+                Map<String, Object> keywords = new LinkedHashMap<>();
+                for (CallArg arg : c.arguments()) {
+                    Object value = eval(arg.value());
+                    if (arg.keywordUnpack()) {
+                        if (!(value instanceof Map<?, ?> map)) throw runtimeError("** requiere un diccionario");
+                        for (Map.Entry<?, ?> entry : map.entrySet()) keywords.put(String.valueOf(entry.getKey()), entry.getValue());
+                    } else if (arg.unpack()) {
+                        positional.addAll(iterable(value));
+                    } else if (arg.name() != null) {
+                        keywords.put(arg.name(), value);
+                    } else {
+                        positional.add(value);
+                    }
+                }
+                return function.call(positional, keywords);
+            }
+            if (expression instanceof Subscript s) {
+                Object target = eval(s.target());
+                if (s.subscript() instanceof Slice slice) return readSlice(target, slice);
+                return readSubscript(target, eval(s.subscript()));
+            }
+            if (expression instanceof Slice) throw runtimeError("Una slice debe estar dentro de un subscript");
+            throw runtimeError("Expresión no soportada todavía: " + expression.getClass().getSimpleName());
         }
 
-        private boolean isAssignment() {
-            int depth = 0;
-
-            for (int i = position; i < tokens.size(); i++) {
-                Token token = tokens.get(i);
-
-                if (token.type == TokenType.LPAREN ||
-                        token.type == TokenType.LBRACKET ||
-                        token.type == TokenType.LBRACE) {
-                    depth++;
-                }
-
-                if (token.type == TokenType.RPAREN ||
-                        token.type == TokenType.RBRACKET ||
-                        token.type == TokenType.RBRACE) {
-                    depth--;
-                }
-
-                if (depth == 0 && token.type == TokenType.EQUAL) {
-                    return true;
-                }
-            }
-
-            return false;
+        private Object lookup(String name) {
+            if (!variables.containsKey(name)) throw runtimeError("NameError: name '" + name + "' is not defined");
+            return variables.get(name);
         }
 
-        private void parseAssignment() {
-            Token name = consume(TokenType.IDENTIFIER, "Se esperaba un nombre de variable");
-
-            if (match(TokenType.LBRACKET)) {
-                Object index = parseExpression();
-                consume(TokenType.RBRACKET, "Falta ']'");
-
-                consume(TokenType.EQUAL, "Se esperaba '='");
-
-                Object value = parseExpression();
-
-                setIndex(getVariable(name.text), index, value);
+        private void assign(Expression target, Object value) {
+            if (target instanceof Name n) {
+                variables.put(n.name(), value);
                 return;
             }
-
-            consume(TokenType.EQUAL, "Se esperaba '='");
-
-            Object value = parseExpression();
-            variables.put(name.text, value);
-
-            if (!isAtEnd()) {
-                throw error("Código inesperado: " + peek().text);
+            if (target instanceof Subscript s) {
+                Object container = eval(s.target());
+                Object index = eval(s.subscript());
+                writeSubscript(container, index, value);
+                return;
             }
-        }
-
-        private Object parseExpression() {
-            return parseOr();
-        }
-
-        private Object parseOr() {
-            Object left = parseAnd();
-
-            while (matchKeyword("or")) {
-                Object right = parseAnd();
-                left = truthy(left) ? left : right;
+            if (target instanceof TupleExpr t) {
+                unpackAssign(t.elements(), value);
+                return;
             }
-
-            return left;
-        }
-
-        private Object parseAnd() {
-            Object left = parseEquality();
-
-            while (matchKeyword("and")) {
-                Object right = parseEquality();
-                left = truthy(left) ? right : left;
+            if (target instanceof ListExpr l) {
+                unpackAssign(l.elements(), value);
+                return;
             }
-
-            return left;
+            throw runtimeError("Objetivo de asignación inválido");
         }
 
-        private Object parseEquality() {
-            Object left = parseComparison();
-
-            while (true) {
-                if (match(TokenType.EQUAL_EQUAL)) {
-                    Object right = parseComparison();
-                    left = equalsValue(left, right);
-                } else if (match(TokenType.NOT_EQUAL)) {
-                    Object right = parseComparison();
-                    left = !equalsValue(left, right);
-                } else {
-                    break;
-                }
-            }
-
-            return left;
+        private void unpackAssign(List<Expression> targets, Object value) {
+            List<Object> values = iterable(value);
+            if (targets.size() != values.size()) throw runtimeError("ValueError: demasiados o muy pocos valores para desempaquetar");
+            for (int i = 0; i < targets.size(); i++) assign(targets.get(i), values.get(i));
         }
 
-        private Object parseComparison() {
-            Object left = parseTerm();
-
-            while (true) {
-                if (match(TokenType.LESS)) {
-                    Object right = parseTerm();
-                    left = compare(left, right) < 0;
-                } else if (match(TokenType.LESS_EQUAL)) {
-                    Object right = parseTerm();
-                    left = compare(left, right) <= 0;
-                } else if (match(TokenType.GREATER)) {
-                    Object right = parseTerm();
-                    left = compare(left, right) > 0;
-                } else if (match(TokenType.GREATER_EQUAL)) {
-                    Object right = parseTerm();
-                    left = compare(left, right) >= 0;
-                } else {
-                    break;
-                }
-            }
-
-            return left;
+        private Object readSubscript(Object target, Object index) {
+            if (index instanceof Slice slice) return readSlice(target, slice);
+            if (target instanceof Map<?, ?> map) return map.get(index);
+            int i = indexValue(index, length(target));
+            if (target instanceof String s) return String.valueOf(s.charAt(i));
+            if (target instanceof List<?> list) return list.get(i);
+            if (target instanceof TupleValue tuple) return tuple.values.get(i);
+            throw runtimeError("El objeto no admite índices");
         }
 
-        private Object parseTerm() {
-            Object left = parseFactor();
+        private Object readSlice(Object target, Slice slice) {
+            int size = length(target).intValueExact();
+            int step = slice.step() == null ? 1 : toInt(eval(slice.step()), "slice step");
+            if (step == 0) throw runtimeError("ValueError: slice step cannot be zero");
+
+            int start = slice.start() == null
+                    ? (step > 0 ? 0 : size - 1)
+                    : normalizeSliceBound(toInt(eval(slice.start()), "slice start"), size);
+
+            int stop = slice.stop() == null
+                    ? (step > 0 ? size : -1)
+                    : normalizeSliceBound(toInt(eval(slice.stop()), "slice stop"), size);
 
-            while (true) {
-                if (match(TokenType.PLUS)) {
-                    Object right = parseFactor();
-                    left = add(left, right);
-                } else if (match(TokenType.MINUS)) {
-                    Object right = parseFactor();
-                    left = subtract(left, right);
-                } else {
-                    break;
-                }
-            }
-
-            return left;
-        }
-
-        private Object parseFactor() {
-            Object left = parseUnary();
-
-            while (true) {
-                if (match(TokenType.STAR)) {
-                    Object right = parseUnary();
-                    left = multiply(left, right);
-                } else if (match(TokenType.SLASH)) {
-                    Object right = parseUnary();
-                    left = divide(left, right);
-                } else if (match(TokenType.DOUBLE_SLASH)) {
-                    Object right = parseUnary();
-                    left = floorDivide(left, right);
-                } else if (match(TokenType.PERCENT)) {
-                    Object right = parseUnary();
-                    left = modulo(left, right);
-                } else {
-                    break;
-                }
-            }
-
-            return left;
-        }
-
-        private Object parseUnary() {
-            if (match(TokenType.MINUS)) {
-                return negate(parseUnary());
-            }
-
-            if (match(TokenType.PLUS)) {
-                return positive(parseUnary());
-            }
-
-            if (matchKeyword("not")) {
-                return !truthy(parseUnary());
-            }
-
-            return parsePower();
-        }
-
-        private Object parsePower() {
-            Object left = parsePrimary();
-
-            if (match(TokenType.DOUBLE_STAR)) {
-                Object right = parseUnary();
-                return power(left, right);
-            }
-
-            return left;
-        }
-
-        private Object parsePrimary() {
-            Token token = peek();
-
-            if (match(TokenType.INTEGER)) {
-                return new BigInteger(token.text);
-            }
-
-            if (match(TokenType.FLOAT)) {
-                return Double.parseDouble(token.text);
-            }
-
-            if (match(TokenType.STRING)) {
-                return token.text;
-            }
-
-            if (matchKeyword("true")) {
-                return true;
-            }
-
-            if (matchKeyword("false")) {
-                return false;
-            }
-
-            if (matchKeyword("None")) {
-                return null;
-            }
-
-            if (matchKeyword("True")) {
-                return true;
-            }
-
-            if (matchKeyword("False")) {
-                return false;
-            }
-
-            if (match(TokenType.LBRACKET)) {
-                return parseList();
-            }
-
-            if (match(TokenType.LPAREN)) {
-                Object value = parseExpression();
-
-                if (match(TokenType.COMMA)) {
-                    List<Object> tuple = new ArrayList<>();
-                    tuple.add(value);
-
-                    while (!check(TokenType.RPAREN)) {
-                        tuple.add(parseExpression());
-
-                        if (!match(TokenType.COMMA)) {
-                            break;
-                        }
-                    }
-
-                    consume(TokenType.RPAREN, "Falta ')'");
-
-                    return new TupleValue(tuple);
-                }
-
-                consume(TokenType.RPAREN, "Falta ')'");
-
-                return value;
-            }
-
-            if (match(TokenType.LBRACE)) {
-                return parseBraceValue();
-            }
-
-            if (match(TokenType.IDENTIFIER)) {
-                String name = token.text;
-
-                if (match(TokenType.LPAREN)) {
-                    return callFunction(name);
-                }
-
-                Object value = getVariable(name);
-
-                while (match(TokenType.LBRACKET)) {
-                    Object index = parseExpression();
-                    consume(TokenType.RBRACKET, "Falta ']'");
-                    value = getIndex(value, index);
-                }
-
-                return value;
-            }
-
-            throw error("Se esperaba un valor, pero apareció: " + token.text);
-        }
-
-        private List<Object> parseList() {
-            List<Object> list = new ArrayList<>();
-
-            if (!check(TokenType.RBRACKET)) {
-                do {
-                    list.add(parseExpression());
-                } while (match(TokenType.COMMA));
-            }
-
-            consume(TokenType.RBRACKET, "Falta ']'");
-
-            return list;
-        }
-
-        private Object parseBraceValue() {
-            if (check(TokenType.RBRACE)) {
-                advance();
-                return new LinkedHashMap<String, Object>();
-            }
-
-            Object first = parseExpression();
-
-            if (match(TokenType.COLON)) {
-                Map<Object, Object> map = new LinkedHashMap<>();
-
-                Object value = parseExpression();
-                map.put(first, value);
-
-                while (match(TokenType.COMMA)) {
-                    if (check(TokenType.RBRACE)) {
-                        break;
-                    }
-
-                    Object key = parseExpression();
-                    consume(TokenType.COLON, "Falta ':' en diccionario");
-                    Object val = parseExpression();
-
-                    map.put(key, val);
-                }
-
-                consume(TokenType.RBRACE, "Falta '}'");
-
-                return map;
-            }
-
-            Set<Object> set = new LinkedHashSet<>();
-            set.add(first);
-
-            while (match(TokenType.COMMA)) {
-                if (check(TokenType.RBRACE)) {
-                    break;
-                }
-
-                set.add(parseExpression());
-            }
-
-            consume(TokenType.RBRACE, "Falta '}'");
-
-            return set;
-        }
-
-        private Object callFunction(String name) {
-            List<Object> args = new ArrayList<>();
-
-            if (!check(TokenType.RPAREN)) {
-                do {
-                    args.add(parseExpression());
-                } while (match(TokenType.COMMA));
-            }
-
-            consume(TokenType.RPAREN, "Falta ')'");
-
-            return callBuiltin(name, args);
-        }
-
-        private boolean matchKeyword(String keyword) {
-            if (check(TokenType.IDENTIFIER) && peek().text.equals(keyword)) {
-                advance();
-                return true;
-            }
-
-            return false;
-        }
-
-        private boolean match(TokenType type) {
-            if (check(type)) {
-                advance();
-                return true;
-            }
-
-            return false;
-        }
-
-        private Token consume(TokenType type, String message) {
-            if (check(type)) {
-                return advance();
-            }
-
-            throw error(message);
-        }
-
-        private boolean check(TokenType type) {
-            return peek().type == type;
-        }
-
-        private Token advance() {
-            if (!isAtEnd()) {
-                position++;
-            }
-
-            return previous();
-        }
-
-        private boolean isAtEnd() {
-            return peek().type == TokenType.EOF;
-        }
-
-        private Token peek() {
-            return tokens.get(position);
-        }
-
-        private Token previous() {
-            return tokens.get(position - 1);
-        }
-
-        private RuntimeException error(String message) {
-            return new RuntimeException(message);
-        }
-    }
-
-    /*
-     * ============================================================
-     * BUILT-IN FUNCTIONS
-     * ============================================================
-     */
-
-    private static Object callBuiltin(String name, List<Object> args) {
-        switch (name) {
-
-            case "print":
-                for (int i = 0; i < args.size(); i++) {
-                    if (i > 0) {
-                        output.append(" ");
-                    }
-
-                    output.append(stringify(args.get(i)));
-                }
-
-                output.append("\n");
-                return null;
-
-            case "len":
-                requireArgs(name, args, 1);
-
-                Object value = args.get(0);
-
-                if (value instanceof String s) {
-                    return BigInteger.valueOf(s.length());
-                }
-
-                if (value instanceof List<?> list) {
-                    return BigInteger.valueOf(list.size());
-                }
-
-                if (value instanceof TupleValue tuple) {
-                    return BigInteger.valueOf(tuple.values.size());
-                }
-
-                if (value instanceof Set<?> set) {
-                    return BigInteger.valueOf(set.size());
-                }
-
-                if (value instanceof Map<?, ?> map) {
-                    return BigInteger.valueOf(map.size());
-                }
-
-                if (value instanceof byte[] bytes) {
-                    return BigInteger.valueOf(bytes.length);
-                }
-
-                throw new RuntimeException("len() no soporta " + typeName(value));
-
-            case "type":
-                requireArgs(name, args, 1);
-                return typeName(args.get(0));
-
-            case "int":
-                requireArgs(name, args, 1);
-                return toInteger(args.get(0));
-
-            case "float":
-                requireArgs(name, args, 1);
-                return toDouble(args.get(0));
-
-            case "str":
-                requireArgs(name, args, 1);
-                return stringify(args.get(0));
-
-            case "bool":
-                requireArgs(name, args, 1);
-                return truthy(args.get(0));
-
-            case "list":
-                requireArgs(name, args, 1);
-
-                if (args.get(0) instanceof List<?> list) {
-                    return new ArrayList<>(list);
-                }
-
-                if (args.get(0) instanceof TupleValue tuple) {
-                    return new ArrayList<>(tuple.values);
-                }
-
-                throw new RuntimeException("list() necesita una lista o tupla");
-
-            case "tuple":
-                requireArgs(name, args, 1);
-
-                if (args.get(0) instanceof List<?> list) {
-                    return new TupleValue(new ArrayList<>(list));
-                }
-
-                if (args.get(0) instanceof TupleValue tuple) {
-                    return new TupleValue(new ArrayList<>(tuple.values));
-                }
-
-                throw new RuntimeException("tuple() necesita una lista o tupla");
-
-            case "set":
-                requireArgs(name, args, 1);
-
-                if (args.get(0) instanceof List<?> list) {
-                    return new LinkedHashSet<>(list);
-                }
-
-                if (args.get(0) instanceof TupleValue tuple) {
-                    return new LinkedHashSet<>(tuple.values);
-                }
-
-                throw new RuntimeException("set() necesita una lista o tupla");
-
-            case "abs":
-                requireArgs(name, args, 1);
-
-                if (args.get(0) instanceof BigInteger integer) {
-                    return integer.abs();
-                }
-
-                return Math.abs(toDouble(args.get(0)));
-
-            case "round":
-                requireArgs(name, args, 1);
-                return BigInteger.valueOf(Math.round(toDouble(args.get(0))));
-
-            case "min":
-                requireAtLeast(name, args, 1);
-
-                Object minimum = args.get(0);
-
-                for (Object arg : args) {
-                    if (compare(arg, minimum) < 0) {
-                        minimum = arg;
-                    }
-                }
-
-                return minimum;
-
-            case "max":
-                requireAtLeast(name, args, 1);
-
-                Object maximum = args.get(0);
-
-                for (Object arg : args) {
-                    if (compare(arg, maximum) > 0) {
-                        maximum = arg;
-                    }
-                }
-
-                return maximum;
-
-            default:
-                throw new RuntimeException("Función desconocida: " + name);
-        }
-    }
-
-    /*
-     * ============================================================
-     * OPERATIONS
-     * ============================================================
-     */
-
-    private static Object add(Object a, Object b) {
-
-        if (a instanceof String || b instanceof String) {
-            return stringify(a) + stringify(b);
-        }
-
-        if (a instanceof List<?> listA && b instanceof List<?> listB) {
-            List<Object> result = new ArrayList<>(listA);
-            result.addAll(listB);
-            return result;
-        }
-
-        if (a instanceof BigInteger ia && b instanceof BigInteger ib) {
-            return ia.add(ib);
-        }
-
-        if (isNumber(a) && isNumber(b)) {
-            return toDouble(a) + toDouble(b);
-        }
-
-        throw new RuntimeException(
-                "No se puede sumar " + typeName(a) + " + " + typeName(b)
-        );
-    }
-
-    private static Object subtract(Object a, Object b) {
-
-        if (a instanceof BigInteger ia && b instanceof BigInteger ib) {
-            return ia.subtract(ib);
-        }
-
-        if (isNumber(a) && isNumber(b)) {
-            return toDouble(a) - toDouble(b);
-        }
-
-        throw new RuntimeException(
-                "No se puede restar " + typeName(a) + " - " + typeName(b)
-        );
-    }
-
-    private static Object multiply(Object a, Object b) {
-
-        if (a instanceof BigInteger ia && b instanceof BigInteger ib) {
-            return ia.multiply(ib);
-        }
-
-        if (isNumber(a) && isNumber(b)) {
-            return toDouble(a) * toDouble(b);
-        }
-
-        if (a instanceof String s && b instanceof BigInteger n) {
-            return repeatString(s, n.intValue());
-        }
-
-        if (b instanceof String s && a instanceof BigInteger n) {
-            return repeatString(s, n.intValue());
-        }
-
-        if (a instanceof List<?> list && b instanceof BigInteger n) {
             List<Object> result = new ArrayList<>();
-
-            for (int i = 0; i < n.intValue(); i++) {
-                result.addAll(list);
+            if (target instanceof String s) {
+                StringBuilder text = new StringBuilder();
+                if (step > 0) {
+                    for (int i = start; i < stop; i += step) text.append(s.charAt(i));
+                } else {
+                    for (int i = start; i > stop; i += step) text.append(s.charAt(i));
+                }
+                return text.toString();
             }
 
+            List<Object> values = iterable(target);
+            if (step > 0) {
+                for (int i = start; i < stop; i += step) result.add(values.get(i));
+            } else {
+                for (int i = start; i > stop; i += step) result.add(values.get(i));
+            }
             return result;
         }
 
-        throw new RuntimeException(
-                "No se puede multiplicar " + typeName(a) + " * " + typeName(b)
-        );
+        private int normalizeSliceBound(int value, int size) {
+            if (value < 0) value += size;
+            return Math.max(0, Math.min(size, value));
+        }
+
+        private int toInt(Object value, String what) {
+            if (!(value instanceof BigInteger i)) throw runtimeError(what + " debe ser un entero");
+            return i.intValueExact();
+        }
+
+        private void writeSubscript(Object target, Object index, Object value) {
+            if (target instanceof Map<?, ?> raw) {
+                @SuppressWarnings("unchecked") Map<Object, Object> map = (Map<Object, Object>) raw;
+                map.put(index, value);
+                return;
+            }
+            int i = indexValue(index, length(target));
+            if (target instanceof List<?> raw) {
+                @SuppressWarnings("unchecked") List<Object> list = (List<Object>) raw;
+                list.set(i, value);
+                return;
+            }
+            throw runtimeError("El objeto no admite asignaciones por índice");
+        }
+
+        private Object builtinPrint(List<Object> args, Map<String, Object> keywords) {
+            String sep = keywords.getOrDefault("sep", " ") instanceof String s ? s : " ";
+            String end = keywords.getOrDefault("end", "\n") instanceof String s ? s : "\n";
+            for (int i = 0; i < args.size(); i++) {
+                if (i > 0) OUTPUT.append(sep);
+                OUTPUT.append(stringify(args.get(i)));
+            }
+            OUTPUT.append(end);
+            return NONE;
+        }
+
+        Map<String, Object> variablesSnapshot() { return new LinkedHashMap<>(variables); }
     }
 
-    private static Object divide(Object a, Object b) {
-        double divisor = toDouble(b);
-
-        if (divisor == 0) {
-            throw new RuntimeException("División por cero");
-        }
-
-        return toDouble(a) / divisor;
+    @FunctionalInterface
+    private interface Callable {
+        Object call(List<Object> positional, Map<String, Object> keywords);
     }
 
-    private static Object floorDivide(Object a, Object b) {
-        double divisor = toDouble(b);
-
-        if (divisor == 0) {
-            throw new RuntimeException("División por cero");
-        }
-
-        return Math.floor(toDouble(a) / divisor);
+    private static final class TupleValue {
+        private final List<Object> values;
+        private TupleValue(List<Object> values) { this.values = List.copyOf(values); }
     }
 
-    private static Object modulo(Object a, Object b) {
-
-        if (a instanceof BigInteger ia && b instanceof BigInteger ib) {
-            return ia.mod(ib);
-        }
-
-        return toDouble(a) % toDouble(b);
+    private static Object unary(String operator, Object value) {
+        return switch (operator) {
+            case "+" -> numericUnary(value, false);
+            case "-" -> numericUnary(value, true);
+            case "not" -> !truthy(value);
+            case "~" -> {
+                if (!(value instanceof BigInteger i)) throw runtimeError("~ requiere un entero");
+                yield i.not();
+            }
+            default -> throw runtimeError("Operador unario desconocido: " + operator);
+        };
     }
 
-    private static Object power(Object a, Object b) {
-        if (a instanceof BigInteger ia && b instanceof BigInteger ib && ib.signum() >= 0) {
-            try {
-                return ia.pow(ib.intValueExact());
-            } catch (ArithmeticException ignored) {
-            }
-        }
-
-        return Math.pow(toDouble(a), toDouble(b));
+    private static Object numericUnary(Object value, boolean negate) {
+        if (value instanceof BigInteger i) return negate ? i.negate() : i;
+        if (value instanceof Number n) return negate ? -n.doubleValue() : n.doubleValue();
+        throw runtimeError("Se esperaba un número");
     }
 
-    private static Object negate(Object value) {
-        if (value instanceof BigInteger integer) {
-            return integer.negate();
+    private static Object binary(Object left, String operator, Object right) {
+        if (operator.equals("+") && left instanceof String a && right instanceof String b) return a + b;
+        if (operator.equals("+") && left instanceof List<?> a && right instanceof List<?> b) {
+            List<Object> result = new ArrayList<>(a);
+            result.addAll(b);
+            return result;
+        }
+        if (operator.equals("+") && left instanceof TupleValue a && right instanceof TupleValue b) {
+            List<Object> result = new ArrayList<>(a.values);
+            result.addAll(b.values);
+            return new TupleValue(result);
+        }
+        if (operator.equals("*") && left instanceof String s && right instanceof BigInteger n) return s.repeat(n.intValueExact());
+        if (operator.equals("*") && right instanceof String s && left instanceof BigInteger n) return s.repeat(n.intValueExact());
+        if (operator.equals("*") && left instanceof List<?> list && right instanceof BigInteger n) {
+            List<Object> result = new ArrayList<>();
+            for (int i = 0; i < n.intValueExact(); i++) result.addAll(list);
+            return result;
         }
 
-        if (value instanceof Number number) {
-            return -number.doubleValue();
+        if (operator.equals("*") && right instanceof List<?> list && left instanceof BigInteger n) {
+            List<Object> result = new ArrayList<>();
+            for (int i = 0; i < n.intValueExact(); i++) result.addAll(list);
+            return result;
         }
 
-        throw new RuntimeException("No se puede negar " + typeName(value));
+        if (operator.equals("@")) throw runtimeError("El operador @ aún no tiene implementación");
+
+        if (left instanceof BigInteger a && right instanceof BigInteger b) {
+            return switch (operator) {
+                case "+" -> a.add(b);
+                case "-" -> a.subtract(b);
+                case "*" -> a.multiply(b);
+                case "//" -> floorDivide(a, b);
+                case "%" -> a.remainder(b);
+                case "**" -> power(a, b);
+                case "&" -> a.and(b);
+                case "|" -> a.or(b);
+                case "^" -> a.xor(b);
+                case "<<" -> a.shiftLeft(b.intValueExact());
+                case ">>" -> a.shiftRight(b.intValueExact());
+                case "/" -> a.doubleValue() / b.doubleValue();
+                default -> throw runtimeError("Operación no válida entre enteros: " + operator);
+            };
+        }
+
+        if (left instanceof Number a && right instanceof Number b) {
+            double x = a.doubleValue();
+            double y = b.doubleValue();
+            return switch (operator) {
+                case "+" -> x + y;
+                case "-" -> x - y;
+                case "*" -> x * y;
+                case "/" -> x / y;
+                case "//" -> Math.floor(x / y);
+                case "%" -> x % y;
+                case "**" -> Math.pow(x, y);
+                default -> throw runtimeError("Operación numérica no válida: " + operator);
+            };
+        }
+
+        throw runtimeError("Operación no válida: " + typeName(left) + " " + operator + " " + typeName(right));
     }
 
-    private static Object positive(Object value) {
-        if (isNumber(value)) {
-            return value;
-        }
-
-        throw new RuntimeException("No se puede aplicar + a " + typeName(value));
+    private static BigInteger floorDivide(BigInteger a, BigInteger b) {
+        if (b.signum() == 0) throw runtimeError("ZeroDivisionError: integer division or modulo by zero");
+        BigInteger[] qr = a.divideAndRemainder(b);
+        if (a.signum() != b.signum() && qr[1].signum() != 0) return qr[0].subtract(BigInteger.ONE);
+        return qr[0];
     }
 
-    /*
-     * ============================================================
-     * INDEXING
-     * ============================================================
-     */
-
-    private static Object getIndex(Object object, Object index) {
-
-        int i = toInteger(index).intValue();
-
-        if (object instanceof String string) {
-            if (i < 0) {
-                i += string.length();
-            }
-
-            if (i < 0 || i >= string.length()) {
-                throw new RuntimeException("Índice fuera de rango");
-            }
-
-            return String.valueOf(string.charAt(i));
-        }
-
-        if (object instanceof List<?> list) {
-            if (i < 0) {
-                i += list.size();
-            }
-
-            if (i < 0 || i >= list.size()) {
-                throw new RuntimeException("Índice fuera de rango");
-            }
-
-            return list.get(i);
-        }
-
-        if (object instanceof TupleValue tuple) {
-            if (i < 0) {
-                i += tuple.values.size();
-            }
-
-            if (i < 0 || i >= tuple.values.size()) {
-                throw new RuntimeException("Índice fuera de rango");
-            }
-
-            return tuple.values.get(i);
-        }
-
-        if (object instanceof Map<?, ?> map) {
-            return map.get(index);
-        }
-
-        throw new RuntimeException(
-                typeName(object) + " no permite índices"
-        );
+    private static Object power(BigInteger base, BigInteger exponent) {
+        if (exponent.signum() < 0) return Math.pow(base.doubleValue(), exponent.doubleValue());
+        return base.pow(exponent.intValueExact());
     }
 
-    @SuppressWarnings("unchecked")
-    private static void setIndex(Object object, Object index, Object value) {
-
-        int i = toInteger(index).intValue();
-
-        if (object instanceof List<?> list) {
-            List<Object> mutable = (List<Object>) list;
-
-            if (i < 0) {
-                i += mutable.size();
-            }
-
-            if (i < 0 || i >= mutable.size()) {
-                throw new RuntimeException("Índice fuera de rango");
-            }
-
-            mutable.set(i, value);
-            return;
-        }
-
-        if (object instanceof Map<?, ?> map) {
-            ((Map<Object, Object>) map).put(index, value);
-            return;
-        }
-
-        throw new RuntimeException(
-                typeName(object) + " no permite asignación por índice"
-        );
+    private static boolean comparison(Object left, String operator, Object right) {
+        return switch (operator) {
+            case "==" -> Objects.equals(left, right);
+            case "!=" -> !Objects.equals(left, right);
+            case "is" -> left == right;
+            case "is not" -> left != right;
+            case "in" -> contains(right, left);
+            case "not in" -> !contains(right, left);
+            case "<", "<=", ">", ">=" -> compareValues(left, right, operator);
+            default -> throw runtimeError("Comparación desconocida: " + operator);
+        };
     }
 
-    /*
-     * ============================================================
-     * VALUES / TYPES
-     * ============================================================
-     */
-
-    private static boolean isNumber(Object value) {
-        return value instanceof BigInteger ||
-                value instanceof Double ||
-                value instanceof Float ||
-                value instanceof Integer ||
-                value instanceof Long ||
-                value instanceof Short ||
-                value instanceof Byte;
+    private static boolean contains(Object container, Object value) {
+        if (container instanceof String s && value instanceof String v) return s.contains(v);
+        if (container instanceof Map<?, ?> map) return map.containsKey(value);
+        if (container instanceof Collection<?> collection) return collection.contains(value);
+        return false;
     }
 
-    private static BigInteger toInteger(Object value) {
-
-        if (value instanceof BigInteger integer) {
-            return integer;
-        }
-
-        if (value instanceof Number number) {
-            return BigInteger.valueOf(number.longValue());
-        }
-
-        if (value instanceof String string) {
-            try {
-                return new BigInteger(string);
-            } catch (NumberFormatException e) {
-                throw new RuntimeException("No es un entero válido: " + string);
-            }
-        }
-
-        if (value instanceof Boolean bool) {
-            return bool ? BigInteger.ONE : BigInteger.ZERO;
-        }
-
-        throw new RuntimeException(
-                "No se puede convertir " + typeName(value) + " a int"
-        );
-    }
-
-    private static double toDouble(Object value) {
-
-        if (value instanceof Number number) {
-            return number.doubleValue();
-        }
-
-        if (value instanceof String string) {
-            try {
-                return Double.parseDouble(string);
-            } catch (NumberFormatException e) {
-                throw new RuntimeException("No es un número válido: " + string);
-            }
-        }
-
-        if (value instanceof Boolean bool) {
-            return bool ? 1.0 : 0.0;
-        }
-
-        throw new RuntimeException(
-                "No se puede convertir " + typeName(value) + " a float"
-        );
+    private static boolean compareValues(Object left, Object right, String operator) {
+        int result;
+        if (left instanceof Number a && right instanceof Number b) result = Double.compare(a.doubleValue(), b.doubleValue());
+        else if (left instanceof String a && right instanceof String b) result = a.compareTo(b);
+        else throw runtimeError("Valores no comparables");
+        return switch (operator) {
+            case "<" -> result < 0;
+            case "<=" -> result <= 0;
+            case ">" -> result > 0;
+            case ">=" -> result >= 0;
+            default -> false;
+        };
     }
 
     private static boolean truthy(Object value) {
-
-        if (value == null) {
-            return false;
-        }
-
-        if (value instanceof Boolean bool) {
-            return bool;
-        }
-
-        if (value instanceof BigInteger integer) {
-            return integer.signum() != 0;
-        }
-
-        if (value instanceof Number number) {
-            return number.doubleValue() != 0;
-        }
-
-        if (value instanceof String string) {
-            return !string.isEmpty();
-        }
-
-        if (value instanceof List<?> list) {
-            return !list.isEmpty();
-        }
-
-        if (value instanceof TupleValue tuple) {
-            return !tuple.values.isEmpty();
-        }
-
-        if (value instanceof Set<?> set) {
-            return !set.isEmpty();
-        }
-
-        if (value instanceof Map<?, ?> map) {
-            return !map.isEmpty();
-        }
-
+        if (value == null) return false;
+        if (value instanceof Boolean b) return b;
+        if (value instanceof Number n) return n.doubleValue() != 0.0;
+        if (value instanceof String s) return !s.isEmpty();
+        if (value instanceof Collection<?> c) return !c.isEmpty();
+        if (value instanceof Map<?, ?> m) return !m.isEmpty();
         return true;
     }
 
-    private static boolean equalsValue(Object a, Object b) {
-
-        if (a == null && b == null) {
-            return true;
-        }
-
-        if (a == null || b == null) {
-            return false;
-        }
-
-        if (isNumber(a) && isNumber(b)) {
-            return Double.compare(toDouble(a), toDouble(b)) == 0;
-        }
-
-        return a.equals(b);
+    private static BigInteger length(Object value) {
+        if (value instanceof String s) return BigInteger.valueOf(s.length());
+        if (value instanceof Collection<?> c) return BigInteger.valueOf(c.size());
+        if (value instanceof Map<?, ?> m) return BigInteger.valueOf(m.size());
+        if (value instanceof TupleValue t) return BigInteger.valueOf(t.values.size());
+        throw runtimeError("object of type '" + typeName(value) + "' has no len()");
     }
 
-    @SuppressWarnings({"unchecked", "rawtypes"})
-    private static int compare(Object a, Object b) {
+    private static int indexValue(Object index, BigInteger size) {
+        if (!(index instanceof BigInteger i)) throw runtimeError("Los índices deben ser enteros");
+        int value = i.intValueExact();
+        int length = size.intValueExact();
+        if (value < 0) value += length;
+        if (value < 0 || value >= length) throw runtimeError("IndexError: índice fuera de rango");
+        return value;
+    }
 
-        if (isNumber(a) && isNumber(b)) {
-            return Double.compare(toDouble(a), toDouble(b));
+    private static List<Object> iterable(Object value) {
+        if (value instanceof List<?> list) return new ArrayList<>(list);
+        if (value instanceof TupleValue tuple) return new ArrayList<>(tuple.values);
+        if (value instanceof Set<?> set) return new ArrayList<>(set);
+        if (value instanceof String s) {
+            List<Object> result = new ArrayList<>();
+            for (int i = 0; i < s.length(); i++) result.add(String.valueOf(s.charAt(i)));
+            return result;
         }
+        if (value instanceof Map<?, ?> map) return new ArrayList<>(map.keySet());
+        throw runtimeError("'" + typeName(value) + "' no es iterable");
+    }
 
-        if (a instanceof String sa && b instanceof String sb) {
-            return sa.compareTo(sb);
+    private static List<Object> toList(Object value) { return value == null ? new ArrayList<>() : iterable(value); }
+
+    private static Object convertInt(Object value) {
+        if (value instanceof BigInteger) return value;
+        if (value instanceof Number n) return BigInteger.valueOf((long) n.doubleValue());
+        if (value instanceof Boolean b) return b ? BigInteger.ONE : BigInteger.ZERO;
+        if (value instanceof String s) return new BigInteger(s.trim());
+        throw runtimeError("int() no puede convertir " + typeName(value));
+    }
+
+    private static Object convertFloat(Object value) {
+        if (value instanceof Number n) return n.doubleValue();
+        if (value instanceof Boolean b) return b ? 1.0 : 0.0;
+        if (value instanceof String s) return Double.parseDouble(s.trim());
+        throw runtimeError("float() no puede convertir " + typeName(value));
+    }
+
+    private static Object minMax(List<Object> args, boolean minimum) {
+        requireArgs(minimum ? "min" : "max", args, 1);
+        List<Object> values = args.size() == 1 ? iterable(args.get(0)) : args;
+        if (values.isEmpty()) throw runtimeError((minimum ? "min" : "max") + "() arg is an empty sequence");
+        Object best = values.get(0);
+        for (int i = 1; i < values.size(); i++) {
+            Object candidate = values.get(i);
+            if (compareValues(candidate, best, minimum ? "<" : ">")) best = candidate;
         }
+        return best;
+    }
 
-        if (a instanceof Comparable ca && a.getClass().isInstance(b)) {
-            return ca.compareTo(b);
-        }
-
-        throw new RuntimeException(
-                "No se pueden comparar " +
-                        typeName(a) +
-                        " y " +
-                        typeName(b)
-        );
+    private static void requireArgs(String name, List<Object> args, int count) {
+        if (args.size() < count) throw runtimeError(name + "() esperaba al menos " + count + " argumento(s)");
     }
 
     private static String typeName(Object value) {
-
-        if (value == null) return "None";
-        if (value instanceof Boolean) return "bool";
+        if (value == null) return "NoneType";
         if (value instanceof BigInteger) return "int";
-        if (value instanceof Double) return "float";
+        if (value instanceof Double || value instanceof Float) return "float";
+        if (value instanceof Boolean) return "bool";
         if (value instanceof String) return "str";
         if (value instanceof List<?>) return "list";
         if (value instanceof TupleValue) return "tuple";
         if (value instanceof Set<?>) return "set";
         if (value instanceof Map<?, ?>) return "dict";
-        if (value instanceof byte[]) return "bytes";
-        if (value instanceof ComplexValue) return "complex";
-
+        if (value instanceof Callable) return "function";
         return value.getClass().getSimpleName();
     }
 
     private static String stringify(Object value) {
-
-        if (value == null) {
-            return "None";
-        }
-
-        if (value instanceof Boolean bool) {
-            return bool ? "True" : "False";
-        }
-
-        if (value instanceof BigInteger integer) {
-            return integer.toString();
-        }
-
-        if (value instanceof Double number) {
-            if (number.isNaN()) return "nan";
-            if (number.isInfinite()) {
-                return number > 0 ? "inf" : "-inf";
-            }
-
-            if (number == Math.rint(number)) {
-                return String.format("%.1f", number);
-            }
-
-            return number.toString();
-        }
-
-        if (value instanceof String string) {
-            return string;
-        }
-
-        if (value instanceof List<?> list) {
-            return collectionToString(list, "[", "]");
-        }
-
-        if (value instanceof TupleValue tuple) {
-            return collectionToString(tuple.values, "(", ")");
-        }
-
-        if (value instanceof Set<?> set) {
-            return collectionToString(set, "{", "}");
-        }
-
+        if (value == null) return "None";
+        if (value instanceof Boolean b) return b ? "True" : "False";
+        if (value instanceof String s) return s;
+        if (value instanceof List<?> list) return collectionString(list, "[", "]");
+        if (value instanceof TupleValue tuple) return collectionString(tuple.values, "(", ")");
+        if (value instanceof Set<?> set) return collectionString(set, "{", "}");
         if (value instanceof Map<?, ?> map) {
-            StringBuilder result = new StringBuilder("{");
-
-            boolean first = true;
-
-            for (Map.Entry<?, ?> entry : map.entrySet()) {
-                if (!first) {
-                    result.append(", ");
-                }
-
-                first = false;
-
-                result.append(stringify(entry.getKey()))
-                        .append(": ")
-                        .append(stringify(entry.getValue()));
-            }
-
-            result.append("}");
-
-            return result.toString();
+            List<String> parts = new ArrayList<>();
+            for (Map.Entry<?, ?> entry : map.entrySet()) parts.add(stringify(entry.getKey()) + ": " + stringify(entry.getValue()));
+            return "{" + String.join(", ", parts) + "}";
         }
-
-        if (value instanceof ComplexValue complex) {
-            return complex.toString();
-        }
-
-        if (value instanceof byte[] bytes) {
-            StringBuilder result = new StringBuilder("b'");
-
-            for (byte b : bytes) {
-                result.append((char) (b & 0xFF));
-            }
-
-            result.append("'");
-
-            return result.toString();
-        }
-
         return String.valueOf(value);
     }
 
-    private static String collectionToString(
-            Iterable<?> values,
-            String start,
-            String end
-    ) {
-        StringBuilder result = new StringBuilder(start);
-
-        boolean first = true;
-
-        for (Object value : values) {
-            if (!first) {
-                result.append(", ");
-            }
-
-            first = false;
-            result.append(stringify(value));
-        }
-
-        result.append(end);
-
-        return result.toString();
+    private static String collectionString(Collection<?> values, String open, String close) {
+        List<String> parts = new ArrayList<>();
+        for (Object value : values) parts.add(stringify(value));
+        String separator = ", ";
+        String body = String.join(separator, parts);
+        if (open.equals("(") && values.size() == 1) body += ",";
+        return open + body + close;
     }
 
-    /*
-     * ============================================================
-     * SPECIAL TYPES
-     * ============================================================
-     */
-
-    private static class TupleValue {
-
-        final List<Object> values;
-
-        TupleValue(List<Object> values) {
-            this.values = values;
-        }
-
-        @Override
-        public boolean equals(Object object) {
-            if (!(object instanceof TupleValue other)) {
-                return false;
-            }
-
-            return values.equals(other.values);
-        }
-
-        @Override
-        public int hashCode() {
-            return values.hashCode();
-        }
-    }
-
-    private static class ComplexValue {
-
-        final double real;
-        final double imaginary;
-
-        ComplexValue(double real, double imaginary) {
-            this.real = real;
-            this.imaginary = imaginary;
-        }
-
-        @Override
-        public String toString() {
-            if (real == 0) {
-                return imaginary + "j";
-            }
-
-            return real + (imaginary >= 0 ? "+" : "") + imaginary + "j";
-        }
-    }
-
-    /*
-     * ============================================================
-     * TOKENIZER
-     * ============================================================
-     */
-
-    private enum TokenType {
-
-        INTEGER,
-        FLOAT,
-        STRING,
-        IDENTIFIER,
-
-        PLUS,
-        MINUS,
-        STAR,
-        DOUBLE_STAR,
-        SLASH,
-        DOUBLE_SLASH,
-        PERCENT,
-
-        EQUAL,
-        EQUAL_EQUAL,
-        NOT_EQUAL,
-
-        LESS,
-        LESS_EQUAL,
-        GREATER,
-        GREATER_EQUAL,
-
-        LPAREN,
-        RPAREN,
-        LBRACKET,
-        RBRACKET,
-        LBRACE,
-        RBRACE,
-
-        COMMA,
-        COLON,
-
-        EOF
-    }
-
-    private static class Token {
-
-        final TokenType type;
-        final String text;
-
-        Token(TokenType type, String text) {
-            this.type = type;
-            this.text = text;
-        }
-    }
-
-    private static List<Token> tokenize(String source) {
-
-        List<Token> tokens = new ArrayList<>();
-
-        int i = 0;
-
-        while (i < source.length()) {
-
-            char c = source.charAt(i);
-
-            if (Character.isWhitespace(c)) {
-                i++;
-                continue;
-            }
-
-            if (c == '#') {
-                break;
-            }
-
-            /*
-             * Numbers
-             */
-
-            if (Character.isDigit(c) ||
-                    (c == '.' && i + 1 < source.length() &&
-                            Character.isDigit(source.charAt(i + 1)))) {
-
-                int start = i;
-                boolean hasDot = false;
-
-                if (c == '.') {
-                    hasDot = true;
-                    i++;
-                }
-
-                while (i < source.length() &&
-                        Character.isDigit(source.charAt(i))) {
-                    i++;
-                }
-
-                if (i < source.length() && source.charAt(i) == '.') {
-                    hasDot = true;
-                    i++;
-
-                    while (i < source.length() &&
-                            Character.isDigit(source.charAt(i))) {
-                        i++;
-                    }
-                }
-
-                String number = source.substring(start, i);
-
-                tokens.add(new Token(
-                        hasDot ? TokenType.FLOAT : TokenType.INTEGER,
-                        number
-                ));
-
-                continue;
-            }
-
-            /*
-             * Strings
-             */
-
-            if (c == '"' || c == '\'') {
-
-                char quote = c;
-                i++;
-
-                StringBuilder string = new StringBuilder();
-
-                while (i < source.length() && source.charAt(i) != quote) {
-
-                    char current = source.charAt(i);
-
-                    if (current == '\\' && i + 1 < source.length()) {
-
-                        i++;
-
-                        char escaped = source.charAt(i);
-
-                        switch (escaped) {
-                            case 'n' -> string.append('\n');
-                            case 't' -> string.append('\t');
-                            case 'r' -> string.append('\r');
-                            case '\\' -> string.append('\\');
-                            case '"' -> string.append('"');
-                            case '\'' -> string.append('\'');
-                            default -> string.append(escaped);
-                        }
-
-                        i++;
-                        continue;
-                    }
-
-                    string.append(current);
-                    i++;
-                }
-
-                if (i >= source.length()) {
-                    throw new RuntimeException("String sin cerrar");
-                }
-
-                i++;
-
-                tokens.add(new Token(
-                        TokenType.STRING,
-                        string.toString()
-                ));
-
-                continue;
-            }
-
-            /*
-             * Identifiers
-             */
-
-            if (Character.isLetter(c) || c == '_') {
-
-                int start = i;
-                i++;
-
-                while (i < source.length()) {
-
-                    char current = source.charAt(i);
-
-                    if (Character.isLetterOrDigit(current) || current == '_') {
-                        i++;
-                    } else {
-                        break;
-                    }
-                }
-
-                tokens.add(new Token(
-                        TokenType.IDENTIFIER,
-                        source.substring(start, i)
-                ));
-
-                continue;
-            }
-
-            /*
-             * Operators
-             */
-
-            if (c == '*' && i + 1 < source.length() &&
-                    source.charAt(i + 1) == '*') {
-
-                tokens.add(new Token(TokenType.DOUBLE_STAR, "**"));
-                i += 2;
-                continue;
-            }
-
-            if (c == '/' && i + 1 < source.length() &&
-                    source.charAt(i + 1) == '/') {
-
-                tokens.add(new Token(TokenType.DOUBLE_SLASH, "//"));
-                i += 2;
-                continue;
-            }
-
-            if (c == '=' && i + 1 < source.length() &&
-                    source.charAt(i + 1) == '=') {
-
-                tokens.add(new Token(TokenType.EQUAL_EQUAL, "=="));
-                i += 2;
-                continue;
-            }
-
-            if (c == '!' && i + 1 < source.length() &&
-                    source.charAt(i + 1) == '=') {
-
-                tokens.add(new Token(TokenType.NOT_EQUAL, "!="));
-                i += 2;
-                continue;
-            }
-
-            if (c == '<' && i + 1 < source.length() &&
-                    source.charAt(i + 1) == '=') {
-
-                tokens.add(new Token(TokenType.LESS_EQUAL, "<="));
-                i += 2;
-                continue;
-            }
-
-            if (c == '>' && i + 1 < source.length() &&
-                    source.charAt(i + 1) == '=') {
-
-                tokens.add(new Token(TokenType.GREATER_EQUAL, ">="));
-                i += 2;
-                continue;
-            }
-
-            switch (c) {
-
-                case '+' -> tokens.add(new Token(TokenType.PLUS, "+"));
-                case '-' -> tokens.add(new Token(TokenType.MINUS, "-"));
-                case '*' -> tokens.add(new Token(TokenType.STAR, "*"));
-                case '/' -> tokens.add(new Token(TokenType.SLASH, "/"));
-                case '%' -> tokens.add(new Token(TokenType.PERCENT, "%"));
-
-                case '=' -> tokens.add(new Token(TokenType.EQUAL, "="));
-
-                case '<' -> tokens.add(new Token(TokenType.LESS, "<"));
-                case '>' -> tokens.add(new Token(TokenType.GREATER, ">"));
-
-                case '(' -> tokens.add(new Token(TokenType.LPAREN, "("));
-                case ')' -> tokens.add(new Token(TokenType.RPAREN, ")"));
-
-                case '[' -> tokens.add(new Token(TokenType.LBRACKET, "["));
-                case ']' -> tokens.add(new Token(TokenType.RBRACKET, "]"));
-
-                case '{' -> tokens.add(new Token(TokenType.LBRACE, "{"));
-                case '}' -> tokens.add(new Token(TokenType.RBRACE, "}"));
-
-                case ',' -> tokens.add(new Token(TokenType.COMMA, ","));
-                case ':' -> tokens.add(new Token(TokenType.COLON, ":"));
-
-                default -> throw new RuntimeException(
-                        "Carácter no reconocido: '" + c + "'"
-                );
-            }
-
-            i++;
-        }
-
-        tokens.add(new Token(TokenType.EOF, ""));
-
-        return tokens;
-    }
-
-    /*
-     * ============================================================
-     * UTILITIES
-     * ============================================================
-     */
-
-    private static List<String> splitLines(String code) {
-        return List.of(code.split("\\R", -1));
-    }
-
-    private static String removeComment(String line) {
-
-        boolean inString = false;
-        char quote = 0;
-
-        for (int i = 0; i < line.length(); i++) {
-
-            char c = line.charAt(i);
-
-            if ((c == '"' || c == '\'') &&
-                    (i == 0 || line.charAt(i - 1) != '\\')) {
-
-                if (!inString) {
-                    inString = true;
-                    quote = c;
-                } else if (quote == c) {
-                    inString = false;
-                }
-
-                continue;
-            }
-
-            if (c == '#' && !inString) {
-                return line.substring(0, i);
-            }
-        }
-
-        return line;
-    }
-
-    private static String repeatString(String string, int times) {
-
-        if (times < 0) {
-            throw new RuntimeException(
-                    "No se puede repetir una cadena un número negativo de veces"
-            );
-        }
-
-        StringBuilder result = new StringBuilder();
-
-        for (int i = 0; i < times; i++) {
-            result.append(string);
-        }
-
-        return result.toString();
-    }
-
-    private static void requireArgs(
-            String function,
-            List<Object> args,
-            int amount
-    ) {
-        if (args.size() != amount) {
-            throw new RuntimeException(
-                    function + "() necesita " + amount + " argumento(s)"
-            );
-        }
-    }
-
-    private static void requireAtLeast(
-            String function,
-            List<Object> args,
-            int amount
-    ) {
-        if (args.size() < amount) {
-            throw new RuntimeException(
-                    function + "() necesita al menos " + amount + " argumento(s)"
-            );
-        }
-    }
-
-    private static Object getVariable(String name) {
-
-        if (!variables.containsKey(name)) {
-            throw new RuntimeException(
-                    "Variable no definida: " + name
-            );
-        }
-
-        return variables.get(name);
+    private static RuntimeException runtimeError(String message) {
+        return new IllegalArgumentException(message);
     }
 }

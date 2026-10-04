@@ -100,7 +100,10 @@ public final class MCodeSyntaxHighlighter {
             "abs",
             "round",
             "min",
-            "max"
+            "max",
+            "sum",
+            "any",
+            "all"
     };
 
     // =========================================================
