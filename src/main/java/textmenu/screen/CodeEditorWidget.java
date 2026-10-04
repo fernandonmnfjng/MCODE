@@ -6,6 +6,7 @@ import net.minecraft.client.gui.screen.narration.NarrationMessageBuilder;
 import net.minecraft.client.gui.widget.ScrollableWidget;
 import net.minecraft.text.Text;
 import org.lwjgl.glfw.GLFW;
+import textmenu.interpreter.MCodeSyntaxHighlighter;
 
 public class CodeEditorWidget extends ScrollableWidget {
 
@@ -13,6 +14,8 @@ public class CodeEditorWidget extends ScrollableWidget {
     private String code = "";
     private int cursorPos = 0;
     private int scrollOffset = 0;
+    private long lastInteractionTime = System.currentTimeMillis();
+    private int lastRenderedCursorPos = -1;
     private static final int LINE_HEIGHT = 12;
     private static final int TAB_SIZE = 4;
     private static final int PADDING = 4;
@@ -62,25 +65,36 @@ public class CodeEditorWidget extends ScrollableWidget {
             );
 
             if (!lines[lineIndex].isEmpty()) {
-                context.drawTextWithShadow(
+                MCodeSyntaxHighlighter.drawLine(
+                        context,
                         this.textRenderer,
-                        Text.literal(lines[lineIndex]),
+                        lines[lineIndex],
                         this.getX() + PADDING + LINE_NUMBER_WIDTH,
-                        y,
-                        0xFFFFFF
+                        y
                 );
             }
         }
 
-        // Cursor parpadeante
-        if ((System.currentTimeMillis() / 500) % 2 == 0) {
+        // Cursor parpadeante y trackeo de escritura
+        if (this.cursorPos != this.lastRenderedCursorPos) {
+            this.lastInteractionTime = System.currentTimeMillis();
+            this.lastRenderedCursorPos = this.cursorPos;
+        }
+
+        boolean showCursor = true;
+        if (System.currentTimeMillis() - this.lastInteractionTime > 500) {
+            showCursor = (System.currentTimeMillis() / 500) % 2 == 0;
+        }
+
+        if (this.isFocused() && showCursor) {
             int[] cursor = getCursorPosition();
             if (cursor != null) {
                 int cx = this.getX() + PADDING + LINE_NUMBER_WIDTH + this.textRenderer.getWidth(
                         lines[cursor[0]].substring(0, Math.min(cursor[1], lines[cursor[0]].length()))
                 );
                 int cy = this.getY() + PADDING + cursor[0] * LINE_HEIGHT - (int) this.scrollOffset;
-                context.fill(cx, cy, cx + 1, cy + LINE_HEIGHT - 2, 0xFFFFFF);
+                // Color blanco opaco (0xFFFFFFFF) y dibujamos una línea vertical de 1px
+                context.fill(cx, cy - 1, cx + 1, cy + LINE_HEIGHT - 1, 0xFFFFFFFF);
             }
         }
     }

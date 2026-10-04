@@ -4,8 +4,10 @@ APP_HOME=$( cd -P "${0%"${0##*/}"}" > /dev/null && printf '%s\n' "$PWD" ) || exi
 
 CLASSPATH=$APP_HOME/gradle/wrapper/gradle-wrapper.jar
 
-if [ -n "$JAVA_HOME" ] ; then
+if [ -n "$JAVA_HOME" ] && [ -x "$JAVA_HOME/bin/java" ] ; then
     JAVACMD=$JAVA_HOME/bin/java
+elif [ -x "/usr/lib/jvm/java-21-openjdk-amd64/bin/java" ]; then
+    JAVACMD=/usr/lib/jvm/java-21-openjdk-amd64/bin/java
 else
     JAVACMD=java
 fi
