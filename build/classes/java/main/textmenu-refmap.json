@@ -1,0 +1,14 @@
+{
+  "mappings": {
+    "textmenu/mixin/KeyBindingMixin": {
+      "onKey": "Lnet/minecraft/class_309;method_1466(JIIII)V"
+    }
+  },
+  "data": {
+    "named:intermediary": {
+      "textmenu/mixin/KeyBindingMixin": {
+        "onKey": "Lnet/minecraft/class_309;method_1466(JIIII)V"
+      }
+    }
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "id": "mcode",
+  "version": "${version}",
+  "name": "MCODE",
+  "description": "Este mod te deja programar otros mods dentro de Minecraft y guardar en un archivo el texto, cargar código y guardar y ejecutar",
+  "authors": ["Tu Nombre"],
+  "license": "MIT",
+  "environment": "client",
+  "entrypoints": {
+    "client": [
+      "textmenu.TextMenuMod"
+    ]
+  },
+  "mixins": [
+    "textmenu.mixins.json"
+  ],
+  "depends": {
+    "fabricloader": ">=0.16.9",
+    "fabric-api": "*",
+    "minecraft": "~1.21.1",
+    "java": ">=21"
+  }
+}
