@@ -57,6 +57,15 @@ public final class MCodeInterpreter {
         return Collections.unmodifiableMap(lastVariables);
     }
 
+    public static List<String> getLastOutputLines() {
+        if (OUTPUT.isEmpty()) return List.of();
+        String normalized = OUTPUT.toString().replace("\r\n", "\n").replace('\r', '\n');
+        String[] parts = normalized.split("\n", -1);
+        int length = parts.length;
+        if (length > 0 && parts[length - 1].isEmpty()) length--;
+        return List.of(java.util.Arrays.copyOf(parts, length));
+    }
+
     public static void clearVariables() {
         lastVariables = new LinkedHashMap<>();
     }

@@ -4,56 +4,94 @@ import net.minecraft.client.gui.DrawContext;
 import net.minecraft.client.gui.screen.Screen;
 import net.minecraft.client.gui.widget.ButtonWidget;
 import net.minecraft.text.Text;
+import org.lwjgl.glfw.GLFW;
+import textmenu.editor.MCodeConsoleWidget;
 import textmenu.interpreter.MCodeInterpreter;
 
 public class TextMenuScreen extends Screen {
 
     private CodeEditorWidget codeEditor;
-    private String outputText = "";
+    private MCodeConsoleWidget consoleWidget;
 
     public TextMenuScreen() {
-        super(Text.literal("Editor de Código"));
+        super(Text.literal("MCODE IDE"));
     }
 
     @Override
     protected void init() {
         int centerX = this.width / 2;
-        int editorWidth = Math.min(600, this.width - 40);
-        int editorHeight = Math.min(300, this.height - 120);
+        int totalWidth = Math.min(640, this.width - 24);
+        int startX = centerX - totalWidth / 2;
 
+        int topY = 24;
+        int buttonHeight = 20;
+        int spacing = 5;
+
+        int availableHeight = this.height - topY - 10;
+        int contentHeight = availableHeight - buttonHeight - (spacing * 2);
+
+        int editorHeight = Math.max(70, (int) (contentHeight * 0.62));
+        int consoleHeight = Math.max(45, contentHeight - editorHeight);
+
+        int editorY = topY;
+        int buttonY = editorY + editorHeight + spacing;
+        int consoleY = buttonY + buttonHeight + spacing;
+
+        // Widget de edición de código
         this.codeEditor = new CodeEditorWidget(
                 this.textRenderer,
-                centerX - editorWidth / 2,
-                40,
-                editorWidth,
+                startX,
+                editorY,
+                totalWidth,
                 editorHeight,
                 Text.literal("Editor")
         );
         this.addDrawableChild(this.codeEditor);
 
-        int buttonY = 40 + editorHeight + 10;
-        int buttonWidth = 100;
+        // Barra de botones
+        int buttonWidth = 90;
+        int buttonSpacing = 6;
+        int buttonsTotalWidth = (buttonWidth * 3) + (buttonSpacing * 2);
+        int buttonStartX = centerX - (buttonsTotalWidth / 2);
 
         this.addDrawableChild(ButtonWidget.builder(
-                Text.literal("Ejecutar"),
-                button -> {
-                    String code = this.codeEditor.getCode();
-                    this.outputText = MCodeInterpreter.execute(code);
-                }
-        ).dimensions(centerX - buttonWidth - 5, buttonY, buttonWidth, 20).build());
+                Text.literal("▶ Ejecutar"),
+                button -> executeCode()
+        ).dimensions(buttonStartX, buttonY, buttonWidth, buttonHeight).build());
 
         this.addDrawableChild(ButtonWidget.builder(
-                Text.literal("Limpiar"),
+                Text.literal("🧹 Limpiar"),
                 button -> {
                     this.codeEditor.setCode("");
-                    this.outputText = "";
+                    this.consoleWidget.clearOutput();
                 }
-        ).dimensions(centerX + 5, buttonY, buttonWidth, 20).build());
+        ).dimensions(buttonStartX + buttonWidth + buttonSpacing, buttonY, buttonWidth, buttonHeight).build());
 
         this.addDrawableChild(ButtonWidget.builder(
-                Text.literal("Cerrar"),
+                Text.literal("✖ Cerrar"),
                 button -> this.close()
-        ).dimensions(centerX - buttonWidth / 2, buttonY + 25, buttonWidth, 20).build());
+        ).dimensions(buttonStartX + (buttonWidth + buttonSpacing) * 2, buttonY, buttonWidth, buttonHeight).build());
+
+        // Consola de salida de MCODE
+        this.consoleWidget = new MCodeConsoleWidget(
+                startX,
+                consoleY,
+                totalWidth,
+                consoleHeight,
+                Text.literal("Consola"),
+                this.textRenderer
+        );
+        this.addDrawableChild(this.consoleWidget);
+    }
+
+    private void executeCode() {
+        String code = this.codeEditor.getCode();
+        String output = MCodeInterpreter.execute(code);
+        if (output == null || output.isEmpty()) {
+            this.consoleWidget.setOutput("✓ Código ejecutado correctamente (sin salida)");
+        } else {
+            this.consoleWidget.setOutput(output);
+        }
     }
 
     @Override
@@ -65,25 +103,9 @@ public class TextMenuScreen extends Screen {
                 this.textRenderer,
                 this.title,
                 this.width / 2,
-                20,
+                9,
                 0xFFFFFF
         );
-
-        if (!this.outputText.isEmpty()) {
-            int outputY = 40 + Math.min(300, this.height - 120) + 55;
-            String[] outLines = this.outputText.split("\n");
-            int maxLines = Math.max(1, (this.height - outputY - 10) / 12);
-            for (int i = 0; i < Math.min(outLines.length, maxLines); i++) {
-                int color = this.outputText.startsWith("Error:") ? 0xFF5555 : 0x55FF55;
-                context.drawTextWithShadow(
-                        this.textRenderer,
-                        Text.literal(outLines[i]),
-                        this.width / 2 - 150,
-                        outputY + (i * 12),
-                        color
-                );
-            }
-        }
     }
 
     @Override
@@ -96,6 +118,12 @@ public class TextMenuScreen extends Screen {
 
     @Override
     public boolean keyPressed(int keyCode, int scanCode, int modifiers) {
+        // Atajo: F5 o Ctrl+Enter para ejecutar
+        if (keyCode == GLFW.GLFW_KEY_F5 || (keyCode == GLFW.GLFW_KEY_ENTER && (modifiers & GLFW.GLFW_MOD_CONTROL) != 0)) {
+            executeCode();
+            return true;
+        }
+
         if (this.codeEditor.isFocused()) {
             return this.codeEditor.keyPressed(keyCode, scanCode, modifiers);
         }

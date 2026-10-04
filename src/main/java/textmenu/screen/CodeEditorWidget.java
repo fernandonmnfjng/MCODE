@@ -1,23 +1,24 @@
 package textmenu.screen;
 
+import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.font.TextRenderer;
 import net.minecraft.client.gui.DrawContext;
 import net.minecraft.client.gui.screen.narration.NarrationMessageBuilder;
 import net.minecraft.client.gui.widget.ScrollableWidget;
 import net.minecraft.text.Text;
 import org.lwjgl.glfw.GLFW;
+import textmenu.editor.MCodeEditorKeyHandler;
+import textmenu.editor.MCodeEditorModel;
 import textmenu.interpreter.MCodeSyntaxHighlighter;
 
 public class CodeEditorWidget extends ScrollableWidget {
 
     private final TextRenderer textRenderer;
-    private String code = "";
-    private int cursorPos = 0;
-    private int scrollOffset = 0;
+    private final MCodeEditorModel model = new MCodeEditorModel();
     private long lastInteractionTime = System.currentTimeMillis();
     private int lastRenderedCursorPos = -1;
+
     private static final int LINE_HEIGHT = 12;
-    private static final int TAB_SIZE = 4;
     private static final int PADDING = 4;
     private static final int LINE_NUMBER_WIDTH = 35;
 
@@ -26,13 +27,17 @@ public class CodeEditorWidget extends ScrollableWidget {
         this.textRenderer = textRenderer;
     }
 
+    public MCodeEditorModel getModel() {
+        return this.model;
+    }
+
     public String getCode() {
-        return this.code;
+        return this.model.getText();
     }
 
     public void setCode(String code) {
-        this.code = code;
-        this.cursorPos = code.length();
+        this.model.setText(code);
+        this.setScrollY(0);
     }
 
     @Override
@@ -43,19 +48,34 @@ public class CodeEditorWidget extends ScrollableWidget {
 
     @Override
     protected double getDeltaYPerScroll() {
-        return LINE_HEIGHT;
+        return LINE_HEIGHT * 2.0;
     }
 
     @Override
     protected void renderContents(DrawContext context, int mouseX, int mouseY, float delta) {
-        String[] lines = this.code.split("\n", -1);
-        int startLine = (int) (this.scrollOffset / LINE_HEIGHT);
-        int visibleLines = (this.height - PADDING * 2) / LINE_HEIGHT;
+        String code = this.model.getText();
+        String[] lines = code.split("\n", -1);
+        int scrollY = (int) this.getScrollY();
+        int startLine = scrollY / LINE_HEIGHT;
+        int visibleLines = (this.height - PADDING * 2) / LINE_HEIGHT + 1;
+
+        int selStart = this.model.selectionStart();
+        int selEnd = this.model.selectionEnd();
+        boolean hasSelection = this.model.hasSelection();
+
+        int charOffset = 0;
+        for (int i = 0; i < startLine && i < lines.length; i++) {
+            charOffset += lines[i].length() + 1;
+        }
 
         for (int i = 0; i <= visibleLines && startLine + i < lines.length; i++) {
             int lineIndex = startLine + i;
-            int y = this.getY() + PADDING + i * LINE_HEIGHT - (int) this.scrollOffset;
+            int y = this.getY() + PADDING + lineIndex * LINE_HEIGHT - scrollY;
+            String line = lines[lineIndex];
+            int lineStartChar = charOffset;
+            int lineEndChar = lineStartChar + line.length();
 
+            // Número de línea
             context.drawTextWithShadow(
                     this.textRenderer,
                     Text.literal(String.format("%3d |", lineIndex + 1)),
@@ -64,21 +84,37 @@ public class CodeEditorWidget extends ScrollableWidget {
                     0x888888
             );
 
-            if (!lines[lineIndex].isEmpty()) {
+            // Resaltado de selección
+            if (hasSelection && selStart < lineEndChar && selEnd > lineStartChar) {
+                int startCol = Math.max(0, selStart - lineStartChar);
+                int endCol = Math.min(line.length(), selEnd - lineStartChar);
+                int sx1 = this.getX() + PADDING + LINE_NUMBER_WIDTH + this.textRenderer.getWidth(line.substring(0, startCol));
+                int sx2 = this.getX() + PADDING + LINE_NUMBER_WIDTH + this.textRenderer.getWidth(line.substring(0, endCol));
+                if (selEnd > lineEndChar) {
+                    sx2 += 6;
+                }
+                context.fill(sx1, y, sx2, y + LINE_HEIGHT, 0x66264F78);
+            }
+
+            // Resaltado de sintaxis
+            if (!line.isEmpty()) {
                 MCodeSyntaxHighlighter.drawLine(
                         context,
                         this.textRenderer,
-                        lines[lineIndex],
+                        line,
                         this.getX() + PADDING + LINE_NUMBER_WIDTH,
                         y
                 );
             }
+
+            charOffset = lineEndChar + 1;
         }
 
-        // Cursor parpadeante y trackeo de escritura
-        if (this.cursorPos != this.lastRenderedCursorPos) {
+        // Cursor parpadeante
+        int cursorPos = this.model.getCursor();
+        if (cursorPos != this.lastRenderedCursorPos) {
             this.lastInteractionTime = System.currentTimeMillis();
-            this.lastRenderedCursorPos = this.cursorPos;
+            this.lastRenderedCursorPos = cursorPos;
         }
 
         boolean showCursor = true;
@@ -92,19 +128,20 @@ public class CodeEditorWidget extends ScrollableWidget {
                 int cx = this.getX() + PADDING + LINE_NUMBER_WIDTH + this.textRenderer.getWidth(
                         lines[cursor[0]].substring(0, Math.min(cursor[1], lines[cursor[0]].length()))
                 );
-                int cy = this.getY() + PADDING + cursor[0] * LINE_HEIGHT - (int) this.scrollOffset;
-                // Color blanco opaco (0xFFFFFFFF) y dibujamos una línea vertical de 1px
+                int cy = this.getY() + PADDING + cursor[0] * LINE_HEIGHT - scrollY;
                 context.fill(cx, cy - 1, cx + 1, cy + LINE_HEIGHT - 1, 0xFFFFFFFF);
             }
         }
     }
 
     private int[] getCursorPosition() {
-        String[] lines = this.code.split("\n", -1);
+        String code = this.model.getText();
+        int cursorPos = this.model.getCursor();
+        String[] lines = code.split("\n", -1);
         int pos = 0;
         for (int i = 0; i < lines.length; i++) {
-            if (pos + lines[i].length() >= this.cursorPos) {
-                return new int[]{i, this.cursorPos - pos};
+            if (pos + lines[i].length() >= cursorPos) {
+                return new int[]{i, cursorPos - pos};
             }
             pos += lines[i].length() + 1;
         }
@@ -112,73 +149,71 @@ public class CodeEditorWidget extends ScrollableWidget {
     }
 
     private int countLines() {
-        if (this.code.isEmpty()) return 1;
-        return this.code.split("\n", -1).length;
+        String code = this.model.getText();
+        if (code.isEmpty()) return 1;
+        return code.split("\n", -1).length;
     }
 
     @Override
     public boolean mouseClicked(double mouseX, double mouseY, int button) {
         if (button == 0 && isWithinBounds(mouseX, mouseY)) {
             this.setFocused(true);
-            updateCursorFromMouse(mouseX, mouseY);
+            long window = MinecraftClient.getInstance().getWindow().getHandle();
+            boolean shift = (GLFW.glfwGetKey(window, GLFW.GLFW_KEY_LEFT_SHIFT) == GLFW.GLFW_PRESS)
+                    || (GLFW.glfwGetKey(window, GLFW.GLFW_KEY_RIGHT_SHIFT) == GLFW.GLFW_PRESS);
+            updateCursorFromMouse(mouseX, mouseY, shift);
             return true;
         }
         return false;
     }
 
-    private void updateCursorFromMouse(double mouseX, double mouseY) {
-        String[] lines = this.code.split("\n", -1);
+    @Override
+    public boolean mouseDragged(double mouseX, double mouseY, int button, double deltaX, double deltaY) {
+        if (button == 0 && isWithinBounds(mouseX, mouseY)) {
+            updateCursorFromMouse(mouseX, mouseY, true);
+            return true;
+        }
+        return super.mouseDragged(mouseX, mouseY, button, deltaX, deltaY);
+    }
 
-        // Calcular línea basada en Y
-        int relativeY = (int) mouseY - this.getY() - PADDING + (int) this.scrollOffset;
+    private void updateCursorFromMouse(double mouseX, double mouseY, boolean keepSelection) {
+        String code = this.model.getText();
+        String[] lines = code.split("\n", -1);
+        int scrollY = (int) this.getScrollY();
+
+        int relativeY = (int) mouseY - this.getY() - PADDING + scrollY;
         int lineIndex = relativeY / LINE_HEIGHT;
 
         if (lineIndex < 0) lineIndex = 0;
         if (lineIndex >= lines.length) lineIndex = lines.length - 1;
 
-        // Calcular columna basada en X
         int relativeX = (int) mouseX - this.getX() - PADDING - LINE_NUMBER_WIDTH;
         String line = lines[lineIndex];
 
         int col = 0;
-        int bestWidth = 0;
         for (int i = 0; i <= line.length(); i++) {
             int width = this.textRenderer.getWidth(line.substring(0, i));
             if (width <= relativeX) {
                 col = i;
-                bestWidth = width;
             } else {
                 break;
             }
         }
 
-        // Calcular posición absoluta del cursor
         int pos = 0;
         for (int i = 0; i < lineIndex; i++) {
             pos += lines[i].length() + 1;
         }
-        this.cursorPos = pos + col;
+        this.model.setCursor(pos + col, keepSelection);
+        this.lastInteractionTime = System.currentTimeMillis();
     }
 
     @Override
     public boolean charTyped(char chr, int modifiers) {
-        if (chr == '\t') {
-            String before = this.code.substring(0, this.cursorPos);
-            String after = this.code.substring(this.cursorPos);
-            this.code = before + "    " + after;
-            this.cursorPos += TAB_SIZE;
-            return true;
-        } else if (chr == '\n' || chr == '\r') {
-            String before = this.code.substring(0, this.cursorPos);
-            String after = this.code.substring(this.cursorPos);
-            this.code = before + "\n" + after;
-            this.cursorPos++;
-            return true;
-        } else if (chr >= 32 && chr < 127) {
-            String before = this.code.substring(0, this.cursorPos);
-            String after = this.code.substring(this.cursorPos);
-            this.code = before + chr + after;
-            this.cursorPos++;
+        if (!this.isFocused()) return false;
+        if (this.model.typeCharacter(chr)) {
+            this.lastInteractionTime = System.currentTimeMillis();
+            ensureCursorVisible();
             return true;
         }
         return false;
@@ -186,88 +221,37 @@ public class CodeEditorWidget extends ScrollableWidget {
 
     @Override
     public boolean keyPressed(int keyCode, int scanCode, int modifiers) {
-        switch (keyCode) {
-            case GLFW.GLFW_KEY_BACKSPACE:
-                if (this.cursorPos > 0) {
-                    String before = this.code.substring(0, this.cursorPos - 1);
-                    String after = this.code.substring(this.cursorPos);
-                    this.code = before + after;
-                    this.cursorPos--;
-                    return true;
-                }
-                break;
-            case GLFW.GLFW_KEY_DELETE:
-                if (this.cursorPos < this.code.length()) {
-                    String before = this.code.substring(0, this.cursorPos);
-                    String after = this.code.substring(this.cursorPos + 1);
-                    this.code = before + after;
-                    return true;
-                }
-                break;
-            case GLFW.GLFW_KEY_LEFT:
-                if (this.cursorPos > 0) {
-                    this.cursorPos--;
-                    return true;
-                }
-                break;
-            case GLFW.GLFW_KEY_RIGHT:
-                if (this.cursorPos < this.code.length()) {
-                    this.cursorPos++;
-                    return true;
-                }
-                break;
-            case GLFW.GLFW_KEY_UP:
-                moveCursorVertical(-1);
-                return true;
-            case GLFW.GLFW_KEY_DOWN:
-                moveCursorVertical(1);
-                return true;
-            case GLFW.GLFW_KEY_HOME:
-                moveCursorToLineStart();
-                return true;
-            case GLFW.GLFW_KEY_END:
-                moveCursorToLineEnd();
-                return true;
-            case GLFW.GLFW_KEY_ENTER:
-                return charTyped('\n', 0);
-            case GLFW.GLFW_KEY_TAB:
-                return charTyped('\t', 0);
+        if (!this.isFocused()) return false;
+
+        if (keyCode == GLFW.GLFW_KEY_ENTER || keyCode == GLFW.GLFW_KEY_KP_ENTER) {
+            this.model.typeCharacter('\n');
+            this.lastInteractionTime = System.currentTimeMillis();
+            ensureCursorVisible();
+            return true;
         }
-        return false;
+
+        int visibleLines = (this.height - PADDING * 2) / LINE_HEIGHT;
+        if (MCodeEditorKeyHandler.handle(this.model, keyCode, modifiers, MinecraftClient.getInstance(), visibleLines)) {
+            this.lastInteractionTime = System.currentTimeMillis();
+            ensureCursorVisible();
+            return true;
+        }
+
+        return super.keyPressed(keyCode, scanCode, modifiers);
     }
 
-    private void moveCursorVertical(int direction) {
-        String[] lines = this.code.split("\n", -1);
+    private void ensureCursorVisible() {
         int[] cursor = getCursorPosition();
-        int newLine = cursor[0] + direction;
-        if (newLine >= 0 && newLine < lines.length) {
-            int targetCol = Math.min(cursor[1], lines[newLine].length());
-            int pos = 0;
-            for (int i = 0; i < newLine; i++) {
-                pos += lines[i].length() + 1;
+        if (cursor != null) {
+            int cursorY = cursor[0] * LINE_HEIGHT;
+            int viewHeight = this.height - PADDING * 2;
+            double currentScroll = this.getScrollY();
+            if (cursorY < currentScroll) {
+                this.setScrollY(cursorY);
+            } else if (cursorY + LINE_HEIGHT > currentScroll + viewHeight) {
+                this.setScrollY(cursorY + LINE_HEIGHT - viewHeight);
             }
-            this.cursorPos = pos + targetCol;
         }
-    }
-
-    private void moveCursorToLineStart() {
-        String[] lines = this.code.split("\n", -1);
-        int[] cursor = getCursorPosition();
-        int pos = 0;
-        for (int i = 0; i < cursor[0]; i++) {
-            pos += lines[i].length() + 1;
-        }
-        this.cursorPos = pos;
-    }
-
-    private void moveCursorToLineEnd() {
-        String[] lines = this.code.split("\n", -1);
-        int[] cursor = getCursorPosition();
-        int pos = 0;
-        for (int i = 0; i <= cursor[0] && i < lines.length; i++) {
-            pos += lines[i].length() + 1;
-        }
-        this.cursorPos = pos - 1;
     }
 
     @Override
@@ -281,11 +265,9 @@ public class CodeEditorWidget extends ScrollableWidget {
 
     @Override
     protected void appendClickableNarrations(NarrationMessageBuilder builder) {
-        // No hay narraciones para el editor
     }
 
-    @Override
-    protected boolean isWithinBounds(double x, double y) {
+    public boolean isWithinBounds(double x, double y) {
         return x >= this.getX() && x <= this.getX() + this.width
                 && y >= this.getY() && y <= this.getY() + this.height;
     }
