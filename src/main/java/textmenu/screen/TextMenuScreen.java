@@ -6,7 +6,13 @@ import net.minecraft.client.gui.widget.ButtonWidget;
 import net.minecraft.text.Text;
 import org.lwjgl.glfw.GLFW;
 import textmenu.editor.MCodeConsoleWidget;
+import textmenu.interpreter.MCodeFileDialogs;
 import textmenu.interpreter.MCodeInterpreter;
+import textmenu.interpreter.MCodeProjectManager;
+
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 
 public class TextMenuScreen extends Screen {
 
@@ -39,19 +45,19 @@ public class TextMenuScreen extends Screen {
 
         // Widget de edición de código
         this.codeEditor = new CodeEditorWidget(
-                this.textRenderer,
                 startX,
                 editorY,
                 totalWidth,
                 editorHeight,
-                Text.literal("Editor")
+                Text.literal("Editor"),
+                this.textRenderer
         );
         this.addDrawableChild(this.codeEditor);
 
         // Barra de botones
-        int buttonWidth = 90;
-        int buttonSpacing = 6;
-        int buttonsTotalWidth = (buttonWidth * 3) + (buttonSpacing * 2);
+        int buttonWidth = 78;
+        int buttonSpacing = 5;
+        int buttonsTotalWidth = (buttonWidth * 5) + (buttonSpacing * 4);
         int buttonStartX = centerX - (buttonsTotalWidth / 2);
 
         this.addDrawableChild(ButtonWidget.builder(
@@ -60,17 +66,27 @@ public class TextMenuScreen extends Screen {
         ).dimensions(buttonStartX, buttonY, buttonWidth, buttonHeight).build());
 
         this.addDrawableChild(ButtonWidget.builder(
+                Text.literal("📂 Abrir"),
+                button -> openFile()
+        ).dimensions(buttonStartX + (buttonWidth + buttonSpacing), buttonY, buttonWidth, buttonHeight).build());
+
+        this.addDrawableChild(ButtonWidget.builder(
+                Text.literal("💾 Guardar"),
+                button -> saveFile()
+        ).dimensions(buttonStartX + (buttonWidth + buttonSpacing) * 2, buttonY, buttonWidth, buttonHeight).build());
+
+        this.addDrawableChild(ButtonWidget.builder(
                 Text.literal("🧹 Limpiar"),
                 button -> {
                     this.codeEditor.setCode("");
                     this.consoleWidget.clearOutput();
                 }
-        ).dimensions(buttonStartX + buttonWidth + buttonSpacing, buttonY, buttonWidth, buttonHeight).build());
+        ).dimensions(buttonStartX + (buttonWidth + buttonSpacing) * 3, buttonY, buttonWidth, buttonHeight).build());
 
         this.addDrawableChild(ButtonWidget.builder(
                 Text.literal("✖ Cerrar"),
                 button -> this.close()
-        ).dimensions(buttonStartX + (buttonWidth + buttonSpacing) * 2, buttonY, buttonWidth, buttonHeight).build());
+        ).dimensions(buttonStartX + (buttonWidth + buttonSpacing) * 4, buttonY, buttonWidth, buttonHeight).build());
 
         // Consola de salida de MCODE
         this.consoleWidget = new MCodeConsoleWidget(
@@ -91,6 +107,31 @@ public class TextMenuScreen extends Screen {
             this.consoleWidget.setOutput("✓ Código ejecutado correctamente (sin salida)");
         } else {
             this.consoleWidget.setOutput(output);
+        }
+    }
+
+    private void openFile() {
+        Path chosen = MCodeFileDialogs.chooseOpen(MCodeProjectManager.getWorkspaceRoot());
+        if (chosen != null) {
+            try {
+                String content = Files.readString(chosen, StandardCharsets.UTF_8);
+                this.codeEditor.setCode(content);
+                this.consoleWidget.setOutput("✓ Archivo abierto: " + chosen.getFileName());
+            } catch (Exception ex) {
+                this.consoleWidget.setOutput("Error al abrir archivo: " + ex.getMessage());
+            }
+        }
+    }
+
+    private void saveFile() {
+        Path chosen = MCodeFileDialogs.chooseSave(MCodeProjectManager.getWorkspaceRoot(), "main.mcode");
+        if (chosen != null) {
+            try {
+                Files.writeString(chosen, this.codeEditor.getCode(), StandardCharsets.UTF_8);
+                this.consoleWidget.setOutput("✓ Archivo guardado: " + chosen.getFileName());
+            } catch (Exception ex) {
+                this.consoleWidget.setOutput("Error al guardar archivo: " + ex.getMessage());
+            }
         }
     }
 
@@ -118,9 +159,21 @@ public class TextMenuScreen extends Screen {
 
     @Override
     public boolean keyPressed(int keyCode, int scanCode, int modifiers) {
-        // Atajo: F5 o Ctrl+Enter para ejecutar
-        if (keyCode == GLFW.GLFW_KEY_F5 || (keyCode == GLFW.GLFW_KEY_ENTER && (modifiers & GLFW.GLFW_MOD_CONTROL) != 0)) {
+        boolean ctrl = (modifiers & GLFW.GLFW_MOD_CONTROL) != 0;
+
+        // Atajos globales
+        if (keyCode == GLFW.GLFW_KEY_F5 || (keyCode == GLFW.GLFW_KEY_ENTER && ctrl)) {
             executeCode();
+            return true;
+        }
+
+        if (keyCode == GLFW.GLFW_KEY_S && ctrl) {
+            saveFile();
+            return true;
+        }
+
+        if (keyCode == GLFW.GLFW_KEY_O && ctrl) {
+            openFile();
             return true;
         }
 

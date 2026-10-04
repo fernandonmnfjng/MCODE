@@ -19,6 +19,13 @@ dependencies {
     mappings "net.fabricmc:yarn:${project.yarn_mappings}:v2"
     modImplementation "net.fabricmc:fabric-loader:${project.loader_version}"
     modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_version}"
+
+    // Native file dialogs (LWJGL TinyFileDialogs) — ya incluido en Minecraft, solo hace falta declararlo para compilar
+    implementation "org.lwjgl:lwjgl-tinyfd:3.3.3"
+    runtimeOnly "org.lwjgl:lwjgl-tinyfd:3.3.3:natives-linux"
+    runtimeOnly "org.lwjgl:lwjgl-tinyfd:3.3.3:natives-windows"
+    runtimeOnly "org.lwjgl:lwjgl-tinyfd:3.3.3:natives-macos"
+    runtimeOnly "org.lwjgl:lwjgl-tinyfd:3.3.3:natives-macos-arm64"
 }
 
 processResources {

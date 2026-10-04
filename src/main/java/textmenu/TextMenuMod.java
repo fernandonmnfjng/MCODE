@@ -22,6 +22,13 @@ public class TextMenuMod implements ClientModInitializer {
                 "category.textmenu"
         ));
 
+        try {
+            java.nio.file.Path gameDir = net.fabricmc.loader.api.FabricLoader.getInstance().getGameDir().resolve("mcode");
+            textmenu.interpreter.MCodeProjectManager.setWorkspaceRoot(gameDir);
+            textmenu.interpreter.MCodeProjectManager.initialize();
+        } catch (Exception ignored) {
+        }
+
         ClientTickEvents.END_CLIENT_TICK.register(client -> {
             while (openMenuKey.wasPressed()) {
                 if (client.currentScreen == null) {

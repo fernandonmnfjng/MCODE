@@ -1,11 +1,6 @@
 package textmenu.interpreter;
 
-public record MCodeToken(
-        Type type,
-        String text,
-        int line,
-        int column
-) {
+public record MCodeToken(Type type, String text, int line, int column) {
     public enum Type {
         IDENTIFIER,
         NUMBER,

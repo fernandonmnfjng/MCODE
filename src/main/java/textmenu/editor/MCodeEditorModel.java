@@ -40,16 +40,8 @@ public final class MCodeEditorModel {
     }
 
     public void setCursor(int index) {
-        setCursor(index, false);
-    }
-
-    public void setCursor(int index, boolean keepSelection) {
-        if (keepSelection) {
-            if (anchor == null) anchor = cursor;
-        } else {
-            anchor = null;
-        }
         cursor = clamp(index);
+        anchor = null;
         preferredColumn = -1;
     }
 
