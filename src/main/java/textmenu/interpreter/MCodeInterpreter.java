@@ -14,6 +14,21 @@ public final class MCodeInterpreter {
     private static final StringBuilder OUTPUT=new StringBuilder();
     private static Map<String,Object> lastVariables=new LinkedHashMap<>();
     private static final Map<String,MExceptionType> EXCEPTION_TYPES=new LinkedHashMap<>();
+    private static final MClass OBJECT_CLASS=new MClass("object",List.of(),Map.of());
+
+    private static final List<String> BUILTIN_NAMES=List.of(
+            "print","len","type","int","float","str","bool","list","tuple","set","dict",
+            "range","abs","round","min","max","sum","any","all","enumerate","zip",
+            "sorted","reversed","isinstance","issubclass","repr","ascii","format","hex","oct",
+            "bin","ord","chr","hash","id","callable","dir","getattr","setattr","hasattr",
+            "delattr","vars","object","super","sleep","pow","divmod","iter","next","map","filter"
+    );
+
+    private static final List<String> KEYWORD_NAMES=List.of(
+            "if","elif","else","while","for","in","and","or","not","is","def","return",
+            "break","continue","pass","class","try","except","finally","raise","global",
+            "nonlocal","lambda","as","with","yield","from","import","async","await","match","case"
+    );
 
     private MCodeInterpreter(){}
 
@@ -60,6 +75,42 @@ public final class MCodeInterpreter {
     }
 
     public static void clearVariables(){ lastVariables=new LinkedHashMap<>(); }
+
+    public static List<String> getBuiltinNames(){ return BUILTIN_NAMES; }
+    public static List<String> getKeywordNames(){ return KEYWORD_NAMES; }
+
+    public static Object resolveCompletionExpression(String expression){
+        if(expression==null||expression.isBlank())return null;
+        String[] parts=expression.split("\\.");
+        Object value=lastVariables.get(parts[0]);
+        if(value==null)return null;
+        for(int i=1;i<parts.length;i++){
+            try{ value=getAttribute(value,parts[i]); }catch(RuntimeException e){ return null; }
+        }
+        return value;
+    }
+
+    public static boolean isCompletionCallable(Object value){ return value instanceof Callable; }
+
+    public static List<String> getCompletionMembers(Object value){
+        LinkedHashSet<String> out=new LinkedHashSet<>();
+        if(value instanceof MModule m){ out.addAll(m.attrs.keySet()); }
+        else if(value instanceof MInstance i){ out.addAll(i.fields.keySet()); collectClassMembers(i.clazz,out); }
+        else if(value instanceof MClass c){ collectClassMembers(c,out); out.add("__name__"); }
+        else if(value instanceof MFunction f){ out.add("__name__"); out.add("__call__"); for(Parameter p:f.parameters) out.add(p.name()); }
+        else if(value instanceof String){ out.addAll(List.of("upper","lower","strip","replace","split","join","startswith","endswith","find","count","length")); }
+        else if(value instanceof List){ out.addAll(List.of("append","extend","insert","pop","remove","clear","reverse","sort","index","count")); }
+        else if(value instanceof Map){ out.addAll(List.of("get","keys","values","items","pop","update","clear")); }
+        else if(value instanceof Set){ out.addAll(List.of("add","remove","discard","clear","union","intersection")); }
+        else if(value instanceof TupleValue){ out.addAll(List.of("count","index")); }
+        else if(value instanceof MRange){ out.add("start"); out.add("stop"); out.add("step"); }
+        return new ArrayList<>(out);
+    }
+
+    private static void collectClassMembers(MClass c,Set<String> out){
+        out.addAll(c.attrs.keySet());
+        for(MClass b:c.bases) collectClassMembers(b,out);
+    }
 
     public static List<String> getLastOutputLines(){
         if(OUTPUT.isEmpty()) return List.of();
@@ -120,6 +171,30 @@ public final class MCodeInterpreter {
             target.define("isinstance",(Callable)this::builtinIsInstance);
             target.define("issubclass",(Callable)this::builtinIsSubclass);
             target.define("repr",(Callable)this::builtinRepr);
+            target.define("ascii",(Callable)this::builtinAscii);
+            target.define("format",(Callable)this::builtinFormat);
+            target.define("hex",(Callable)this::builtinHex);
+            target.define("oct",(Callable)this::builtinOct);
+            target.define("bin",(Callable)this::builtinBin);
+            target.define("ord",(Callable)this::builtinOrd);
+            target.define("chr",(Callable)this::builtinChr);
+            target.define("hash",(Callable)this::builtinHash);
+            target.define("id",(Callable)this::builtinId);
+            target.define("callable",(Callable)this::builtinCallable);
+            target.define("dir",(Callable)this::builtinDir);
+            target.define("getattr",(Callable)this::builtinGetAttr);
+            target.define("setattr",(Callable)this::builtinSetAttr);
+            target.define("hasattr",(Callable)this::builtinHasAttr);
+            target.define("delattr",(Callable)this::builtinDelAttr);
+            target.define("vars",(Callable)this::builtinVars);
+            target.define("object",OBJECT_CLASS);
+            target.define("sleep",(Callable)this::builtinSleep);
+            target.define("pow",(Callable)this::builtinPow);
+            target.define("divmod",(Callable)this::builtinDivmod);
+            target.define("iter",(Callable)this::builtinIter);
+            target.define("next",(Callable)this::builtinNext);
+            target.define("map",(Callable)this::builtinMap);
+            target.define("filter",(Callable)this::builtinFilter);
             target.define("super",(Callable)this::builtinSuper);
 
             if(EXCEPTION_TYPES.isEmpty()){
@@ -237,14 +312,15 @@ public final class MCodeInterpreter {
         private MModule importModule(String moduleName){
             MModule cached=modules.get(moduleName);
             if(cached!=null) return cached;
+            if(moduleName.equals("time")){ MModule m=builtinTimeModule(); modules.put(moduleName,m); return m; }
+            if(moduleName.equals("math")){ MModule m=builtinMathModule(); modules.put(moduleName,m); return m; }
             if(!importing.add(moduleName)) throw runtimeError("ImportError: importación circular: "+moduleName);
             try{
                 Path file=resolveModule(moduleName);
                 if(file==null) throw runtimeError("ModuleNotFoundError: no se encontró el módulo '"+moduleName+"'");
                 String source=Files.readString(file,StandardCharsets.UTF_8);
                 Program program=new MCodeParser(new MCodeLexer().tokenize(source)).parse();
-                Environment moduleEnv=new Environment(null,true,false);
-                installBuiltinsInto(moduleEnv);
+                Environment moduleEnv=new Environment(global,false,false);
                 MModule module=new MModule(moduleName,moduleEnv.values);
                 modules.put(moduleName,module);
                 for(Statement statement:program.statements()) execute(statement,moduleEnv);
@@ -592,8 +668,14 @@ public final class MCodeInterpreter {
         private Object builtinList(List<Object>a,Map<String,Object>k){if(a.isEmpty())return new ArrayList<>();requireCount("list",a,1);return new ArrayList<>(iterable(a.get(0)));}
         private Object builtinTuple(List<Object>a,Map<String,Object>k){if(a.isEmpty())return new TupleValue(List.of());requireCount("tuple",a,1);return new TupleValue(iterable(a.get(0)));}
         private Object builtinSet(List<Object>a,Map<String,Object>k){if(a.isEmpty())return new LinkedHashSet<>();requireCount("set",a,1);return new LinkedHashSet<>(iterable(a.get(0)));}
-        private Object builtinDict(List<Object>a,Map<String,Object>k){if(a.isEmpty())return new LinkedHashMap<>(); if(a.size()==1&&a.get(0) instanceof Map<?,?> m){Map<Object,Object> out=new LinkedHashMap<>();m.forEach(out::put);return out;} throw runtimeError("TypeError: dict() argumento no soportado");}
+        private Object builtinDict(List<Object>a,Map<String,Object>k){Map<Object,Object> out=new LinkedHashMap<>();if(a.size()>1)throw runtimeError("TypeError: dict() esperaba como máximo 1 argumento posicional");if(a.size()==1){if(!(a.get(0) instanceof Map<?,?> m))throw runtimeError("TypeError: dict() argumento no soportado");m.forEach(out::put);}for(var e:k.entrySet())out.put(e.getKey(),e.getValue());return out;}
         private Object builtinRange(List<Object>a,Map<String,Object>k){if(a.size()<1||a.size()>3)throw runtimeError("TypeError: range expected 1 to 3 arguments");int start,stop,step;if(a.size()==1){start=0;stop=toInt(a.get(0));step=1;}else{start=toInt(a.get(0));stop=toInt(a.get(1));step=a.size()==3?toInt(a.get(2)):1;}if(step==0)throw runtimeError("ValueError: range() arg 3 must not be zero");return new MRange(start,stop,step);}
+        private Object builtinPow(List<Object>a,Map<String,Object>k){if(a.size()<2||a.size()>3)throw runtimeError("TypeError: pow() expected 2 or 3 arguments");Object base=a.get(0),exp=a.get(1);Object out=binary(base,"**",exp);if(a.size()==3){BigInteger mod=toBigInteger(a.get(2));if(out instanceof BigInteger i)return i.mod(mod);throw runtimeError("TypeError: pow() 3-argument form requires integers");}return out;}
+        private Object builtinDivmod(List<Object>a,Map<String,Object>k){requireCount("divmod",a,2);Object q=binary(a.get(0),"//",a.get(1));Object r=binary(a.get(0),"%",a.get(1));return new TupleValue(List.of(q,r));}
+        private Object builtinIter(List<Object>a,Map<String,Object>k){requireCount("iter",a,1);if(a.get(0) instanceof MIterator i)return i;return new MIterator(iterable(a.get(0)));}
+        private Object builtinNext(List<Object>a,Map<String,Object>k){if(a.isEmpty()||a.size()>2)throw runtimeError("TypeError: next() expected 1 or 2 arguments");if(!(a.get(0) instanceof MIterator it))throw runtimeError("TypeError: object is not an iterator");try{return it.next();}catch(NoSuchElementException e){if(a.size()==2)return a.get(1);throw runtimeError("StopIteration");}}
+        private Object builtinMap(List<Object>a,Map<String,Object>k){if(a.size()<2)throw runtimeError("TypeError: map() expected at least 2 arguments");if(!(a.get(0) instanceof Callable f))throw runtimeError("TypeError: map() argument 1 must be callable");List<List<Object>> seqs=new ArrayList<>();for(int i=1;i<a.size();i++)seqs.add(iterable(a.get(i)));int n=seqs.stream().mapToInt(List::size).min().orElse(0);List<Object>out=new ArrayList<>();for(int i=0;i<n;i++){List<Object> args=new ArrayList<>();for(List<Object> seq:seqs)args.add(seq.get(i));out.add(f.call(args,Map.of()));}return new MIterator(out);}
+        private Object builtinFilter(List<Object>a,Map<String,Object>k){requireCount("filter",a,2);Callable f=null;if(a.get(0)!=null){if(!(a.get(0) instanceof Callable c))throw runtimeError("TypeError: filter() argument 1 must be callable");f=c;}List<Object>out=new ArrayList<>();for(Object x:iterable(a.get(1))){boolean keep=f==null?truthy(x):truthy(f.call(List.of(x),Map.of()));if(keep)out.add(x);}return new MIterator(out);}
         private Object builtinAbs(List<Object>a,Map<String,Object>k){requireCount("abs",a,1);Object v=a.get(0);if(v instanceof BigInteger i)return i.abs();if(v instanceof Number n)return Math.abs(n.doubleValue());throw runtimeError("TypeError: bad operand type for abs()");}
         private Object builtinRound(List<Object>a,Map<String,Object>k){requireCount("round",a,1);Object v=a.get(0);int nd=a.size()>1?toInt(a.get(1)):0;if(v instanceof BigInteger)return v;if(v instanceof Number)return BigDecimal.valueOf(((Number)v).doubleValue()).setScale(nd,RoundingMode.HALF_EVEN).doubleValue();throw runtimeError("TypeError: round() argument must be a number");}
         private Object builtinMin(List<Object>a,Map<String,Object>k){return extremum(a,true);}
@@ -604,11 +686,52 @@ public final class MCodeInterpreter {
         private Object builtinAll(List<Object>a,Map<String,Object>k){requireCount("all",a,1);for(Object x:iterable(a.get(0)))if(!truthy(x))return false;return true;}
         private Object builtinEnumerate(List<Object>a,Map<String,Object>k){requireCount("enumerate",a,1);int start=a.size()>1?toInt(a.get(1)):0;List<Object>out=new ArrayList<>();for(Object x:iterable(a.get(0))){out.add(new TupleValue(List.of(BigInteger.valueOf(start++),x)));}return out;}
         private Object builtinZip(List<Object>a,Map<String,Object>k){List<List<Object>> all=new ArrayList<>();for(Object x:a)all.add(iterable(x));int n=all.stream().mapToInt(List::size).min().orElse(0);List<Object>out=new ArrayList<>();for(int i=0;i<n;i++){List<Object>row=new ArrayList<>();for(List<Object> v:all)row.add(v.get(i));out.add(new TupleValue(row));}return out;}
-        private Object builtinSorted(List<Object>a,Map<String,Object>k){requireCount("sorted",a,1);List<Object>out=new ArrayList<>(iterable(a.get(0)));out.sort(MCodeInterpreter::compare);return out;}
-        private Object builtinReversed(List<Object>a,Map<String,Object>k){requireCount("reversed",a,1);List<Object>out=new ArrayList<>(iterable(a.get(0)));Collections.reverse(out);return out;}
+        private Object builtinSorted(List<Object>a,Map<String,Object>k){requireCount("sorted",a,1);List<Object>out=new ArrayList<>(iterable(a.get(0)));out.sort(MCodeInterpreter::compare);if(truthy(k.getOrDefault("reverse",false)))Collections.reverse(out);return out;}
+        private Object builtinReversed(List<Object>a,Map<String,Object>k){requireCount("reversed",a,1);List<Object>out=new ArrayList<>(iterable(a.get(0)));Collections.reverse(out);return new MIterator(out);}
         private Object builtinIsInstance(List<Object>a,Map<String,Object>k){requireCount("isinstance",a,2);Object t=a.get(1),v=a.get(0);if(t instanceof MClass c)return isInstance(v,c);if(t instanceof MExceptionType et)return et.matches(exceptionTypeOf(v));return false;}
         private Object builtinIsSubclass(List<Object>a,Map<String,Object>k){requireCount("issubclass",a,2);if(!(a.get(0) instanceof MClass c))return false;if(a.get(1) instanceof MClass b)return c.isSubclassOf(b);return false;}
         private Object builtinRepr(List<Object>a,Map<String,Object>k){requireCount("repr",a,1);return stringify(a.get(0));}
+        private Object builtinAscii(List<Object>a,Map<String,Object>k){requireCount("ascii",a,1);return asciiString(stringify(a.get(0)));}
+        private Object builtinFormat(List<Object>a,Map<String,Object>k){if(a.isEmpty()||a.size()>2)throw runtimeError("TypeError: format() arguments");String value=stringify(a.get(0));String spec=a.size()==2?stringify(a.get(1)):"";if(spec.isEmpty())return value;try{if(a.get(0) instanceof Number)return String.format(Locale.ROOT,"%"+spec,((Number)a.get(0)).doubleValue());}catch(Exception ignored){}return value;}
+        private Object builtinHex(List<Object>a,Map<String,Object>k){requireCount("hex",a,1);return "0x"+toBigInteger(a.get(0)).toString(16);}
+        private Object builtinOct(List<Object>a,Map<String,Object>k){requireCount("oct",a,1);return "0o"+toBigInteger(a.get(0)).toString(8);}
+        private Object builtinBin(List<Object>a,Map<String,Object>k){requireCount("bin",a,1);return "0b"+toBigInteger(a.get(0)).toString(2);}
+        private Object builtinOrd(List<Object>a,Map<String,Object>k){requireCount("ord",a,1);String s=stringify(a.get(0));if(s.codePointCount(0,s.length())!=1)throw runtimeError("TypeError: ord() expected a character");return BigInteger.valueOf(s.codePointAt(0));}
+        private Object builtinChr(List<Object>a,Map<String,Object>k){requireCount("chr",a,1);int n=toInt(a.get(0));if(!Character.isValidCodePoint(n))throw runtimeError("ValueError: chr() arg not in range");return new String(Character.toChars(n));}
+        private Object builtinHash(List<Object>a,Map<String,Object>k){requireCount("hash",a,1);Object v=a.get(0);if(v instanceof List||v instanceof Map||v instanceof Set)throw runtimeError("TypeError: unhashable type: '"+typeName(v)+"'");return BigInteger.valueOf(Objects.hashCode(v));}
+        private Object builtinId(List<Object>a,Map<String,Object>k){requireCount("id",a,1);return BigInteger.valueOf(System.identityHashCode(a.get(0)));}
+        private Object builtinCallable(List<Object>a,Map<String,Object>k){requireCount("callable",a,1);return a.get(0) instanceof Callable;}
+        private Object builtinDir(List<Object>a,Map<String,Object>k){if(a.isEmpty())return new ArrayList<>(global.values.keySet());requireCount("dir",a,1);return new ArrayList<>(getCompletionMembers(a.get(0)));}
+        private Object builtinGetAttr(List<Object>a,Map<String,Object>k){if(a.size()<2||a.size()>3)throw runtimeError("TypeError: getattr() arguments");try{return getAttribute(a.get(0),stringify(a.get(1)));}catch(MCodeException e){if(a.size()==3)return a.get(2);throw e;}}
+        private Object builtinSetAttr(List<Object>a,Map<String,Object>k){requireCount("setattr",a,3);setAttribute(a.get(0),stringify(a.get(1)),a.get(2));return null;}
+        private Object builtinHasAttr(List<Object>a,Map<String,Object>k){requireCount("hasattr",a,2);try{getAttribute(a.get(0),stringify(a.get(1)));return true;}catch(MCodeException e){return false;}}
+        private Object builtinDelAttr(List<Object>a,Map<String,Object>k){requireCount("delattr",a,2);deleteAttribute(a.get(0),stringify(a.get(1)));return null;}
+        private Object builtinVars(List<Object>a,Map<String,Object>k){if(a.isEmpty())return new LinkedHashMap<>(global.values);requireCount("vars",a,1);Object value=a.get(0);if(value instanceof MInstance i)return new LinkedHashMap<>(i.fields);if(value instanceof MModule m)return new LinkedHashMap<>(m.attrs);if(value instanceof MClass c)return new LinkedHashMap<>(c.attrs);throw runtimeError("TypeError: vars() argument must have __dict__");}
+        private Object builtinSleep(List<Object>a,Map<String,Object>k){requireCount("sleep",a,1);double seconds=toDouble(a.get(0));if(seconds<0)throw runtimeError("ValueError: sleep length must be non-negative");try{Thread.sleep((long)(seconds*1000), (int)((seconds*1_000_000_000L)%1_000_000));}catch(InterruptedException e){Thread.currentThread().interrupt();throw runtimeError("RuntimeError: sleep() fue interrumpido");}return null;}
+
+        private MModule builtinTimeModule(){
+            Map<String,Object> attrs=new LinkedHashMap<>();
+            attrs.put("sleep",(Callable)this::builtinSleep);
+            attrs.put("time",(Callable)(a,k)->BigDecimal.valueOf(System.currentTimeMillis()/1000.0));
+            return new MModule("time",attrs);
+        }
+
+        private MModule builtinMathModule(){
+            Map<String,Object> attrs=new LinkedHashMap<>();
+            attrs.put("pi",Math.PI); attrs.put("e",Math.E);
+            attrs.put("sqrt",(Callable)(a,k)->Math.sqrt(toDouble(first(a,"sqrt",1))));
+            attrs.put("sin",(Callable)(a,k)->Math.sin(toDouble(first(a,"sin",1))));
+            attrs.put("cos",(Callable)(a,k)->Math.cos(toDouble(first(a,"cos",1))));
+            attrs.put("tan",(Callable)(a,k)->Math.tan(toDouble(first(a,"tan",1))));
+            attrs.put("floor",(Callable)(a,k)->Math.floor(toDouble(first(a,"floor",1))));
+            attrs.put("ceil",(Callable)(a,k)->Math.ceil(toDouble(first(a,"ceil",1))));
+            attrs.put("log",(Callable)(a,k)->Math.log(toDouble(first(a,"log",1))));
+            attrs.put("exp",(Callable)(a,k)->Math.exp(toDouble(first(a,"exp",1))));
+            return new MModule("math",attrs);
+        }
+
+        private Object first(List<Object>a,String name,int n){requireCount(name,a,n);return a.get(0);}
+
         private Object builtinSuper(List<Object>a,Map<String,Object>k){
             MClass current=currentFunctionClass;
             Object self=currentSelf;
@@ -802,6 +925,16 @@ public final class MCodeInterpreter {
         }
     }
 
+    private static final class MIterator implements Iterable<Object> {
+        final List<Object> values;
+        int index;
+        MIterator(List<Object> values){this.values=new ArrayList<>(values);this.index=0;}
+        boolean hasNext(){return index<values.size();}
+        Object next(){if(!hasNext())throw new NoSuchElementException();return values.get(index++);}
+        List<Object> remaining(){return new ArrayList<>(values.subList(Math.min(index,values.size()),values.size()));}
+        public Iterator<Object> iterator(){return values.subList(Math.min(index,values.size()),values.size()).iterator();}
+    }
+
     private static final class MRange {
         final int start,stop,step;
         MRange(int s,int e,int p){start=s;stop=e;step=p;}
@@ -869,7 +1002,7 @@ public final class MCodeInterpreter {
                 case "remove"->(a,k)->{requireStatic("remove",a,1);int i=list.indexOf(a.get(0));if(i<0)throw runtimeError("ValueError: list.remove(x): x not in list");list.remove(i);return null;};
                 case "clear"->(a,k)->{list.clear();return null;};
                 case "reverse"->(a,k)->{Collections.reverse(list);return null;};
-                case "sort"->(a,k)->{list.sort(MCodeInterpreter::compare);return null;};
+                case "sort"->(a,k)->{list.sort(MCodeInterpreter::compare);if(truthy(k.getOrDefault("reverse",false)))Collections.reverse(list);return null;};
                 case "index"->(a,k)->{requireStatic("index",a,1);int i=list.indexOf(a.get(0));if(i<0)throw runtimeError("ValueError: x is not in list");return BigInteger.valueOf(i);};
                 case "count"->(a,k)->{requireStatic("count",a,1);return BigInteger.valueOf(list.stream().filter(x->Objects.equals(x,a.get(0))).count());};
                 default->null;
@@ -925,7 +1058,15 @@ public final class MCodeInterpreter {
     private static void setAttribute(Object target,String name,Object value){
         if(target instanceof MInstance i){i.fields.put(name,value);return;}
         if(target instanceof MClass c){c.attrs.put(name,value);return;}
+        if(target instanceof MModule m){m.attrs.put(name,value);return;}
         throw runtimeError("AttributeError: '"+typeName(target)+"' no tiene atributos asignables");
+    }
+
+    private static void deleteAttribute(Object target,String name){
+        if(target instanceof MInstance i){if(i.fields.remove(name)!=null)return;throw runtimeError("AttributeError: no existe '"+name+"'");}
+        if(target instanceof MClass c){if(c.attrs.remove(name)!=null)return;throw runtimeError("AttributeError: no existe '"+name+"'");}
+        if(target instanceof MModule m){if(m.attrs.remove(name)!=null)return;throw runtimeError("AttributeError: no existe '"+name+"'");}
+        throw runtimeError("AttributeError: no se puede borrar el atributo '"+name+"'");
     }
 
     private static Object readSubscript(Object target,Object index){
@@ -1101,6 +1242,7 @@ public final class MCodeInterpreter {
         if(v instanceof Map<?,?>m)return !m.isEmpty();
         if(v instanceof TupleValue t)return !t.values.isEmpty();
         if(v instanceof MRange r)return rangeLength(r)>0;
+        if(v instanceof MIterator it)return it.hasNext();
         return true;
     }
 
@@ -1110,6 +1252,7 @@ public final class MCodeInterpreter {
         if(v instanceof Map<?,?>m)return m.size();
         if(v instanceof TupleValue t)return t.values.size();
         if(v instanceof MRange r)return rangeLength(r);
+        if(v instanceof MIterator it)return it.remaining().size();
         throw runtimeError("TypeError: object of type '"+typeName(v)+"' has no len()");
     }
 
@@ -1131,6 +1274,7 @@ public final class MCodeInterpreter {
         if(v instanceof String s){List<Object>o=new ArrayList<>();s.chars().forEach(c->o.add(String.valueOf((char)c)));return o;}
         if(v instanceof MRange r){List<Object>o=new ArrayList<>();for(int x=r.start;r.step>0?x<r.stop:x>r.stop;x+=r.step)o.add(BigInteger.valueOf(x));return o;}
         if(v instanceof MGenerator g)return new ArrayList<>(g.values);
+        if(v instanceof MIterator it){List<Object> out=new ArrayList<>();while(it.hasNext())out.add(it.next());return out;}
         throw runtimeError("TypeError: '"+typeName(v)+"' no es iterable");
     }
 
@@ -1162,10 +1306,12 @@ public final class MCodeInterpreter {
         if(v instanceof MAsyncFunction)return "function";
         if(v instanceof MCoroutine)return "coroutine";
         if(v instanceof MGenerator)return "generator";
+        if(v instanceof MIterator)return "iterator";
         if(v instanceof MModule)return "module";
         if(v instanceof MClass c)return "type";
         if(v instanceof MInstance i)return i.clazz.name;
         if(v instanceof MExceptionType)return "type";
+        if(v instanceof Callable)return "function";
         return v.getClass().getSimpleName();
     }
 
@@ -1185,6 +1331,7 @@ public final class MCodeInterpreter {
         if(v instanceof MAsyncFunction)return "<function>";
         if(v instanceof MCoroutine)return "<coroutine>";
         if(v instanceof MGenerator g)return "<generator object ("+g.values.size()+" values)>";
+        if(v instanceof MIterator)return "<iterator>";
         if(v instanceof MModule m)return "<module '"+m.name+"'>";
         if(v instanceof MExceptionType e)return e.name;
         if(v instanceof MCodeException e)return e.typeName+(e.detail.isEmpty()?"":": "+e.detail);
@@ -1195,6 +1342,36 @@ public final class MCodeInterpreter {
     private static String join(Collection<?> c,String sep,boolean tupleOne){
         StringBuilder b=new StringBuilder();boolean first=true;for(Object x:c){if(!first)b.append(sep);first=false;b.append(stringify(x));}if(tupleOne&&c.size()==1)b.append(",");return b.toString();
     }
+
+    private static BigInteger toBigInteger(Object v){
+        if(v instanceof BigInteger i)return i;
+        if(v instanceof Number n)return BigInteger.valueOf(n.longValue());
+        throw runtimeError("TypeError: se esperaba un entero");
+    }
+
+    private static double toDouble(Object v){
+        if(v instanceof Number n)return n.doubleValue();
+        throw runtimeError("TypeError: se esperaba un número");
+    }
+
+    private static String asciiString(String s){
+        StringBuilder out=new StringBuilder("'");
+        for(int i=0;i<s.length();){
+            int cp=s.codePointAt(i); i+=Character.charCount(cp);
+            if(cp>=32&&cp<127&&cp!='\\'&&cp!='\'')out.appendCodePoint(cp);
+            else if(cp=='\\')out.append("\\\\");
+            else if(cp=='\'')out.append("\\'");
+            else if(cp=='\n')out.append("\\n");
+            else if(cp=='\r')out.append("\\r");
+            else if(cp=='\t')out.append("\\t");
+            else if(cp<=0xFF)out.append(String.format(Locale.ROOT,"\\x%02x",cp));
+            else if(cp<=0xFFFF)out.append(String.format(Locale.ROOT,"\\u%04x",cp));
+            else out.append(String.format(Locale.ROOT,"\\U%08x",cp));
+        }
+        return out.append("'").toString();
+    }
+
+    private static Map<String,Object> globalNames(){return lastVariables;}
 
     private static int toInt(Object v){if(v instanceof BigInteger i)return i.intValueExact();throw runtimeError("TypeError: se esperaba un entero");}
     private static void requireCount(String name,List<Object>a,int n){if(a.size()!=n)throw runtimeError("TypeError: "+name+"() esperaba "+n+" argumento(s)");}

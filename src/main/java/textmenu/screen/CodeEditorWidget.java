@@ -10,7 +10,11 @@ import net.minecraft.text.Text;
 import org.lwjgl.glfw.GLFW;
 import textmenu.editor.MCodeEditorKeyHandler;
 import textmenu.editor.MCodeEditorModel;
+import textmenu.interpreter.MCodeCompletion;
 import textmenu.interpreter.MCodeSyntaxHighlighter;
+
+import java.util.Collections;
+import java.util.List;
 
 /**
  * MCODE multiline editor.

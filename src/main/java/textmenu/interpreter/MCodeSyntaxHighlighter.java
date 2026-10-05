@@ -25,11 +25,15 @@ public final class MCodeSyntaxHighlighter {
     private static final Set<String> BUILTINS = Set.of(
             "print","len","type","int","float","str","bool","list","tuple","set","dict",
             "range","abs","round","min","max","sum","any","all","enumerate","zip",
-            "sorted","reversed","isinstance","issubclass","repr","super"
+            "sorted","reversed","isinstance","issubclass","repr","ascii","format","hex","oct",
+        "bin","ord","chr","hash","id","callable","dir","getattr","setattr","hasattr",
+        "delattr","vars","object","super","sleep","pow","divmod","iter","next","map","filter"
     );
 
     private static final Set<String> TYPES = Set.of(
-            "int","float","str","bool","list","tuple","set","dict","range","complex","bytes","bytearray"
+            "int","float","str","bool","list","tuple","set","dict","range","complex","bytes","bytearray",
+        "object","BaseException","Exception","ArithmeticError","ZeroDivisionError","ValueError","TypeError",
+        "NameError","IndexError","KeyError","AttributeError","SyntaxError","ImportError","ModuleNotFoundError"
     );
 
     private static final int DEFAULT = 0xFFD4D4D4;
