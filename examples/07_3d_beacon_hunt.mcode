@@ -1,0 +1,72 @@
+SetPATH games/beacon_3d_hunt
+import mc
+import time
+import math
+
+# Mini juego 3D de recolección: no coloca ni elimina bloques.
+mc.mode("global")
+if mc.mode() != "global":
+    print("Beacon 3D necesita modo GLOBAL en un mundo de un jugador.")
+else:
+    mc.clear()
+    start = mc.player_pos()
+    base_x = start[0]
+    base_y = start[1]
+    base_z = start[2]
+
+    score = 0
+    best_file = "data/beacon_3d_best.txt"
+    if file_exists(best_file):
+        try:
+            best = int(read_text(best_file))
+        except Exception:
+            best = 0
+    else:
+        best = 0
+
+    arena = mc.box(
+        base_x - 6, base_y, base_z - 6,
+        base_x + 6, base_y + 2.8, base_z + 6,
+        color="cyan", width=2, fill=False, group="arena"
+    )
+    locations = [[5, 0], [0, 5], [-5, 0], [0, -5], [4, 4], [-4, -4], [4, -4], [-4, 4]]
+    index = 0
+
+    def spawn_beacon(i):
+        offset = locations[i % len(locations)]
+        x = base_x + offset[0]
+        y = base_y + 0.8
+        z = base_z + offset[1]
+        mc.circle(x, base_y + 0.06, z, 0.82, plane="xz", segments=28,
+                  color="lime", fill=True, alpha=0.25, group="target")
+        mc.circle(x, base_y + 0.08, z, 0.82, plane="xz", segments=28,
+                  color="yellow", width=3, group="target")
+        mc.sphere(x, y, z, 0.42, segments=12, rings=8,
+                  color="lime", fill=True, alpha=0.8, group="target")
+        mc.line(x, base_y + 0.1, z, x, base_y + 1.8, z,
+                color="lime", width=3, group="target")
+        return [x, y, z]
+
+    beacon = spawn_beacon(index)
+    print("Beacon 3D iniciado. Camina hacia la esfera verde para recogerla.")
+    print("Record local: " + str(best))
+
+    while True:
+        player = mc.player_pos()
+        dx = player[0] - beacon[0]
+        dy = player[1] + 0.8 - beacon[1]
+        dz = player[2] - beacon[2]
+        distance = math.sqrt(dx * dx + dy * dy + dz * dz)
+
+        if distance < 1.55:
+            score += 1
+            mc.clear(group="target")
+            print("Baliza recogida. Puntos: " + str(score))
+            if score > best:
+                best = score
+                write_text(best_file, str(best))
+                print("Nuevo record: " + str(best))
+            index += 1
+            beacon = spawn_beacon(index)
+
+        time.sleep(0.06)

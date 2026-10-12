@@ -1,0 +1,10 @@
+SetPATH tests/console_copy_test
+import time
+
+print("MCODE console copy test")
+print("Line 1: this text should be copied")
+print("Line 2: import_model debugging is easier with a full log")
+for i in range(1, 6):
+    print("Test line " + str(i))
+    time.sleep(0.1)
+print("Finished. Click Copiar log or press Ctrl+Shift+C.")

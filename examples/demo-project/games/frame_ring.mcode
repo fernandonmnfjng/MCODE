@@ -1,0 +1,14 @@
+SetPATH games/frame_ring
+import mc
+import time
+import math
+
+mc.mode("local", sigue=True)
+phase = 0
+while True:
+    mc.begin_frame()
+    radius = 1.5 + math.sin(phase) * 0.25
+    mc.circle(0, 1.2, 4, radius, plane="xz", segments=48, color="lime", width=2)
+    mc.end_frame()
+    phase += 0.08
+    time.sleep(0.05)

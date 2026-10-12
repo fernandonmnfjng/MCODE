@@ -1,0 +1,21 @@
+SetPATH examples/model_import_obj
+import mc
+import time
+
+# First use Resources > Importar modelo Blender (OBJ) to copy your .obj file
+# into .minecraft/mcode/models/. Replace demo-cube.obj with your exported model.
+mc.clear()
+mc.mode("local", sigue=True)
+model = mc.import_model(
+    "models/demo-cube.obj",
+    0, 1.5, 4,
+    scale=0.75,
+    axis="blender",
+    color="cyan",
+    fill=True
+)
+
+print("Modelo OBJ importado. Detén el script para limpiar la escena.")
+while True:
+    model.rotate(0, 2, 0)
+    time.sleep(0.05)

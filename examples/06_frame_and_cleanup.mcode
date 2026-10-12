@@ -1,0 +1,16 @@
+SetPATH examples/06_frame_and_cleanup
+import mc
+import time
+
+# Prueba mínima para confirmar que no quedan dibujos cuando se detiene el script.
+mc.mode("local", sigue=True)
+step = 0
+while True:
+    mc.begin_frame()
+    mc.box(-1, 0.2, 4, 1, 2, 6, color="cyan", fill=True, alpha=0.25)
+    mc.line(-2, 1, 5, 2, 1, 5, color="yellow", width=3)
+    mc.circle(0, 1, 5, 1.4, plane="xz", segments=28, color="lime", width=2)
+    mc.point(step % 3 - 1, 1.2, 5, size=0.14, color="magenta")
+    mc.end_frame()
+    step += 1
+    time.sleep(0.1)

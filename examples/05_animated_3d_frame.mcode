@@ -1,0 +1,33 @@
+SetPATH examples/05_animated_3d_frame
+import mc
+import time
+import math
+
+# Cada iteración construye un frame oculto y lo intercambia de forma atómica.
+# Al pulsar Detener, MCODE descarta el frame y limpia las formas de este script.
+mc.mode("local", sigue=True)
+phase = 0.0
+while True:
+    mc.begin_frame()
+
+    vertices = [
+        [-0.55, -0.55, -0.55], [0.55, -0.55, -0.55],
+        [0.55, 0.55, -0.55], [-0.55, 0.55, -0.55],
+        [-0.55, -0.55, 0.55], [0.55, -0.55, 0.55],
+        [0.55, 0.55, 0.55], [-0.55, 0.55, 0.55]
+    ]
+    faces = [
+        [0, 1, 2, 3], [4, 7, 6, 5], [0, 4, 5, 1],
+        [1, 5, 6, 2], [2, 6, 7, 3], [3, 7, 4, 0]
+    ]
+    cube = mc.mesh(vertices, faces, color="cyan", fill=True, alpha=0.65)
+    cube.move(math.cos(phase) * 1.5, 2.2 + math.sin(phase * 2) * 0.35, 5 + math.sin(phase) * 1.5)
+    cube.rotate(phase * 57.2958, phase * 32.0, phase * 21.0)
+
+    orbit_x = math.cos(phase * 1.4) * 2.6
+    orbit_z = 5 + math.sin(phase * 1.4) * 2.6
+    mc.sphere(orbit_x, 2.0, orbit_z, 0.28, segments=12, rings=8, color="orange", fill=True)
+    mc.end_frame()
+
+    phase += 0.08
+    time.sleep(0.05)

@@ -1,0 +1,14 @@
+SetPATH examples/2d_primitives
+import mc
+
+mc.clear()
+mc.mode("local", sigue=True)
+
+# Formas relativas al jugador, delante de la camara.
+mc.circle(0, 1.5, 5, 1.0, plane="xz", segments=40, color="cyan", width=3)
+mc.circle(0, 1.5, 5, 0.6, plane="xz", segments=32, color="blue", fill=True, alpha=0.3)
+mc.rect(-2.2, 1.2, 5, 1.5, 1.0, plane="xz", color="orange", fill=True, alpha=0.25)
+mc.polyline([[-3, 4.0], [-2.5, 4.5], [-2.0, 4.0], [-1.5, 4.5]], plane="xz", level=1.0, color="yellow", width=3)
+mc.polygon([[1.5, 4.0], [2.5, 5.0], [3.4, 4.0], [2.7, 3.4], [1.8, 3.4]], plane="xz", level=1.4, color="lime", fill=True, alpha=0.45)
+
+print("Prueba 2D creada. Mira alrededor de tu personaje.")

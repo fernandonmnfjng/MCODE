@@ -1,0 +1,32 @@
+SetPATH examples/04_3d_primitives
+import mc
+
+# Prueba de las nuevas primitivas 3D. Las coordenadas son relativas al jugador.
+mc.clear()
+mc.mode("local", sigue=True)
+
+marker = mc.point(0, 1.5, 4, size=0.16, color="yellow")
+ball = mc.sphere(-1.4, 1.5, 5, 0.65, segments=20, rings=12, color="cyan", alpha=0.75, fill=True)
+ball.rotate(0, 25, 0)
+
+column = mc.cylinder(0, 0.2, 5, 0.45, 1.8, segments=20, color="orange", fill=True, alpha=0.7)
+column.rotate(0, 10, 0)
+
+hat = mc.cone(1.5, 0.2, 5, 0.55, 1.8, segments=20, color="lime", fill=True, alpha=0.7)
+hat.rotate(0, 15, 0)
+
+vertices = [
+    [-0.5, 0.5, 0], [0.5, 0.5, 0], [0.5, 1.5, 0], [-0.5, 1.5, 0],
+    [-0.5, 0.5, 1], [0.5, 0.5, 1], [0.5, 1.5, 1], [-0.5, 1.5, 1]
+]
+faces = [
+    [0, 1, 2, 3], [4, 7, 6, 5], [0, 4, 5, 1],
+    [1, 5, 6, 2], [2, 6, 7, 3], [3, 7, 4, 0]
+]
+cube = mc.mesh(vertices, faces, color="magenta", fill=True, alpha=0.55)
+cube.move(0, 0.2, 7)
+cube.rotate(15, 25, 10)
+cube.scale(1.15)
+
+print("Primitivas 3D creadas: punto, esfera, cilindro, cono y mesh.")
+print("Selecciona Ejecutar y luego Detener para comprobar que la escena se limpia.")

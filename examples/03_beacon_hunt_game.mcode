@@ -1,0 +1,65 @@
+SetPATH games/beacon_hunt
+import mc
+import time
+import math
+
+# Juego local de recoleccion visual. No modifica bloques ni entidades.
+mc.mode("global")
+if mc.mode() != "global":
+    print("Abre un mundo de un jugador para ejecutar Beacon Hunt.")
+    mc.chat("Beacon Hunt necesita modo GLOBAL en un mundo de un jugador.")
+else:
+    mc.clear()
+    start = mc.player_pos()
+    base_x = start[0]
+    base_y = start[1]
+    base_z = start[2]
+    score = 0
+    best_path = "data/beacon_hunt_best.txt"
+    if file_exists(best_path):
+        best = int(read_text(best_path))
+    else:
+        best = 0
+
+    # Arena wireframe. Moverse fisicamente hacia la baliza para recogerla.
+    arena = mc.box(base_x - 6, base_y, base_z - 6, base_x + 6, base_y + 2.5, base_z + 6, color="cyan", width=2, group="arena")
+    positions = [[5, 0], [0, 5], [-5, 0], [0, -5], [4, 4], [-4, -4], [4, -4], [-4, 4]]
+
+    target_index = 0
+    offset = positions[target_index]
+    tx = base_x + offset[0]
+    ty = base_y + 0.12
+    tz = base_z + offset[1]
+    target = mc.circle(tx, ty, tz, 0.85, plane="xz", segments=32, color="lime", fill=True, alpha=0.32, group="beacon")
+    ring = mc.circle(tx, ty + 0.02, tz, 0.85, plane="xz", segments=32, color="yellow", width=3, group="beacon")
+    pillar = mc.line(tx, ty, tz, tx, ty + 1.8, tz, color="lime", width=3, group="beacon")
+
+    mc.chat("Beacon Hunt iniciado. Busca la baliza verde dentro del cuadrado cyan.")
+    print("Beacon Hunt: record guardado = " + str(best))
+
+    while True:
+        player = mc.player_pos()
+        dx = player[0] - tx
+        dy = (player[1] + 0.8) - ty
+        dz = player[2] - tz
+        distance = math.sqrt(dx * dx + dy * dy + dz * dz)
+
+        if distance < 1.8:
+            score += 1
+            mc.clear(group="beacon")
+            mc.chat("Baliza recogida. Puntos: " + str(score))
+            if score > best:
+                best = score
+                write_text(best_path, str(best))
+                mc.chat("Nuevo record local: " + str(best))
+
+            target_index = score % len(positions)
+            offset = positions[target_index]
+            tx = base_x + offset[0]
+            ty = base_y + 0.12
+            tz = base_z + offset[1]
+            target = mc.circle(tx, ty, tz, 0.85, plane="xz", segments=32, color="lime", fill=True, alpha=0.32, group="beacon")
+            ring = mc.circle(tx, ty + 0.02, tz, 0.85, plane="xz", segments=32, color="yellow", width=3, group="beacon")
+            pillar = mc.line(tx, ty, tz, tx, ty + 1.8, tz, color="lime", width=3, group="beacon")
+
+        time.sleep(0.1)

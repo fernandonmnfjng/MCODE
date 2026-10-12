@@ -1,0 +1,19 @@
+SetPATH games/model_spin
+import mc
+import time
+
+mc.mode("local", sigue=True)
+mc.clear()
+model = mc.import_model(
+    "models/demo-cube.obj",
+    0, 1.5, 4,
+    scale=0.75,
+    axis="blender",
+    color="cyan",
+    fill=True
+)
+
+print("Proyecto cargado: modelo OBJ giratorio. Detén el script para limpiarlo.")
+while True:
+    model.rotate(0, 2, 0)
+    time.sleep(0.05)

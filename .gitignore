@@ -1,0 +1,12 @@
+# Generated Gradle output
+.gradle/
+build/
+
+# IDE metadata
+.idea/
+.vscode/
+*.iml
+
+# Operating system files
+.DS_Store
+Thumbs.db
